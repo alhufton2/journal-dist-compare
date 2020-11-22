@@ -26,8 +26,7 @@ $q->charset('utf-8');      # set the charset
 # Load other packages
 use CHI; 
 use Encode;
-use Statistics::Discrete;
-use Statistics::ANOVA;
+use Statistics::Descriptive::Discrete;
 use HTML::Table;
 use Business::ISSN;
 use LWP::UserAgent;
@@ -43,12 +42,13 @@ my $cache = CHI->new( driver => 'File' );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
-my $contact_email = 'enter your email address';
+my $contact_email = 'enter email here';
 my $timeout = 60;
 my $cache_time = '7 days';
 my $top_num = 10; 
 my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
 my $uaheader = "Journal Distribution Compare Tool/alpha (https://alhufton.com, mailto:$contact_email)";
+my $alpha = 0.05; 
 
 binmode(STDOUT, ":utf8");
 
@@ -59,13 +59,10 @@ my $end_year;
 my $log; 
 
 # main data variables
-my %journal_dois;    #array per ISSN, top ten guaranteed to be sorted
-my %journal_names;   #per ISSN
-my %citation_counts; #per doi
-my %titles;          #per doi
+my %citation_counts; # ISSN->Stat Discrete obj
+my %top_pubs;        # array per ISSN of CrossRef items, top ten guaranteed to be sorted
 
 # Main body 
-# Let's create a separate subroutine just to clean and check the parameters. 
 print "Content-Type: text/html; charset=utf-8\n\n";
 start_html();
 print_header();
@@ -120,8 +117,7 @@ sub clean_parameters {
     
 }
     
-sub get_data {
-        
+sub get_data {     
     # force a print flush, so that user sees a more complete html page while waiting for work to finish
     $| = 1; 
     
@@ -132,169 +128,181 @@ sub get_data {
     foreach ( @issn_clean ) {
         print "Obtaining citation metadata for journal $_.\n";
         my @results = get_crossref_metadata($_, $start_year, $end_year, $uaheader);
+        print "Processing metadata for journal $_.\n";
         if ( @results ) {
-            my $num = @results;
+            
+            $citation_counts{$_} = new Statistics::Descriptive::Discrete;
+            
+            my $min;
             foreach my $item ( @results ) {
                 if ( $item->{'is-referenced-by-count'} ) {
-                    $citation_counts{$item->{'DOI'}} = $item->{'is-referenced-by-count'};
+                   $citation_counts{$_}->add_data($item->{'is-referenced-by-count'});
  
                     ### partial sorting algorithm ######
                     my $k = 0;
                     my $added = 0;
-                    foreach my $doi ( @{$journal_dois{$_}} ) {
-                        last if ( $k > $top_num );
-                        if ( $item->{'is-referenced-by-count'} >= $citation_counts{$doi} ) {
-                            splice @{journal_dois{$_}}, $k, 0, $item->{'DOI'};
-                            $added = 1;
-                            last;
+                    if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
+                        foreach my $item2 ( @{$top_pubs{$_}} ) {
+                            last if ( $k > $top_num );
+                            if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
+                                splice @{$top_pubs{$_}}, $k, 0, $item;
+                                pop @{$top_pubs{$_}} if ( @{$top_pubs{$_}} > $top_num ); 
+                                $min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
+                                $added = 1;
+                                last;
+                            }
+                            ++$k;
                         }
-                        ++$k;
                     }
-                    if ( $added == 0 ) { push @{$journal_dois{$_}}, $item->{'DOI'} }
+                    if ( $added == 0 && @{$top_pubs{$_}} < $top_num ) { 
+                        push @{$top_pubs{$_}}, $item;
+                    }
+                    
                     ####################################          
                     
                 } else {
-                    $citation_counts{$item->{'DOI'}} = 0;
-                    push @{$journal_dois{$_}}, $item->{'DOI'};
-                }
-                
-                $titles{$item->{'DOI'}} = $item->{'title'}->[0];
-                unless ( $journal_names{$_} ) {
-                    $journal_names{$_}->{'container-title'} = $item->{'container-title'}->[0];
-                    if ( $item->{'short-container-title'}->[0] ) {
-                        $journal_names{$_}->{'short-container-title'} = $item->{'short-container-title'}->[0]; 
-                    } else {
-                        $journal_names{$_}->{'short-container-title'} = $item->{'container-title'}->[0];
-                    }
+                    $citation_counts{$_}->add_data(0);
                 }
             }
-        }
+        } else { die "No items in CrossREF result for $_\n\n"; }
     }
     
-    print "Running calculations\n";
-    print "</pre></div>\n";
-    $| = 0;    
-    print "<p class=\"flip\" id=\"results_button\" onclick=\"toggleRes()\">Show Results</p>\n";
+    print "Running calculations\n";  
 }
 
 sub make_results {
     
-    my %cdfs;
+    my %ecdf; # hash of arrays
+    my %n;
+    my @results_HTML;
+    my $j_num = scalar @issn_clean;
     
+    push @results_HTML, "<p class=\"flip\" id=\"results_button\" onclick=\"toggleRes()\">Show Results</p>\n";
+
     # Place the distribution chart
-    print "<div id=\"results\">\n";
-    print "<h2>Empirical cumulative distribution plots</h2>\n";
-    print "<canvas id=\"myChart\"></canvas>\n";
+    push @results_HTML, "<div id=\"results\">\n";
+    push @results_HTML, "<h2>Empirical cumulative distribution plots</h2>\n";
+    push @results_HTML,  "<canvas id=\"myChart\"></canvas>\n";
     
     # output some basic summary stats
-    my $aov = Statistics::ANOVA->new();
-    my $k = 1;
-    print "<h2>Summary statistics</h2>\n";
-    print "<p>for journal articles published in $start_year";
-    if ($end_year == $start_year) { print "</p>\n"; }
-    else { print " to $end_year</p>\n"; }
+    push @results_HTML, "<h2>Summary statistics</h2>\n";
+    push @results_HTML, "<p>for journal articles published in $start_year";
+    if ($end_year == $start_year) { push @results_HTML, "</p>\n"; }
+    else { push @results_HTML, " to $end_year</p>\n"; }
     my $stattable = new HTML::Table( -head=>['Journal', 'ISSN', 'Count', 'Mean', 'Median', 'Variance'] );
     $stattable->setRowHead(1);
    
     foreach my $issn ( @issn_clean ) {
-        if ( $journal_dois{$issn} ) {
-            my $stat = Statistics::Discrete->new();
-            my @citations = map { $citation_counts{$_} } @{$journal_dois{$issn}}; 
-            $stat->add_data(@citations);
-            
-            $cdfs{$issn} = $stat->empirical_distribution_function();
-            
-            $stattable->addRow(
-                $journal_names{$issn}->{'container-title'}, 
-                $issn, 
-                $stat->count(), 
-                sprintf("%.2f", $stat->mean()), 
-                $stat->median(), 
-                sprintf("%.2f", $stat->variance())
-                );
-            
-            $aov->add_data($k => @citations);
+        $n{$issn} = $citation_counts{$issn}->count();
+        my @uniqs = $citation_counts{$issn}->uniq(); 
+        my $f = $citation_counts{$issn}->frequency_distribution_ref(\@uniqs);
+        my $i = 0;
+        foreach ( @uniqs ) {
+            $i += $f->{$_};
+            $ecdf{$issn}->[$_] = $i/$n{$issn};
+        } 
+        
+        $stattable->addRow(
+            $top_pubs{$issn}->[0]->{'container-title'}->[0],
+            $issn, 
+            $n{$issn}, 
+            sprintf("%.2f", $citation_counts{$issn}->mean()), 
+            $citation_counts{$issn}->median(), 
+            sprintf("%.2f", $citation_counts{$issn}->variance())
+            );
+    }
+    push @results_HTML, $stattable->getTable();
+   
+    if ( $j_num > 1 ) {
+        
+        # Running the Kolmogorov-Smirnov pairwise tests
+        push @results_HTML, "<h3>Kolmogorov-Smirnov tests</h3>\n";
+        print "Running pairwise KS tests.\n";
+        my @short_journal_names;
+        foreach my $issn (@issn_clean) {
+            if ( $top_pubs{$issn}->[0]->{'short-container-title'}->[0] ) {
+                push @short_journal_names, $top_pubs{$issn}->[0]->{'short-container-title'}->[0];
+            } else {
+                push @short_journal_names, $top_pubs{$issn}->[0]->{'container-title'}->[0];
+            }
+        }
+        my $pairtable = new HTML::Table( -width=>'70%', -data=>[['', @short_journal_names]] );
+        
+        my $col_width = 100/(@issn_clean+1);
+        
+        # Calculate a Bonferroni corrected alpha
+        my $c_alpha = $alpha; 
+        $c_alpha /= 3 if ($j_num == 3);
+        $c_alpha /= 6 if ($j_num == 4);
+        
+        my $k = 1;
+        my %inverseD;
+        my %inverse_flag;
+        foreach my $issn1 (@issn_clean) {
+            my $i = 1;
+            my $r = $k + 1;
+            my $jname = shift @short_journal_names;
+            $pairtable->setCell($r,1,$jname);
+            foreach my $issn2 (@issn_clean) {
+                my $c = $i + 1;
+                my $D = 0;
+                my $flag = 0;
+                if ( $k == 1) { $pairtable->setColWidth($c, "$col_width\%") }
+                my $cell_content = 'ERROR';
+                
+                if ( $issn1 eq $issn2 ) {
+                    $cell_content = 0;
+                } elsif ( defined $inverseD{$issn1}->{$issn2} ) {
+                    $D = $inverseD{$issn1}->{$issn2};
+                    $flag = $inverse_flag{$issn1}->{$issn2};
+                    $cell_content = sprintf("%.4g", $D);
+                    $cell_content .= '*' if ( $flag );
+                } else {
+                    ($D, $flag) = &KS_test_discrete( $ecdf{$issn1}, $n{$issn1}, $ecdf{$issn2}, $n{$issn2}, $c_alpha );
+                
+                    $cell_content = sprintf("%.4g", $D);
+                    $cell_content .= '*' if ( $flag );
+                    $inverseD{$issn2}->{$issn1} = $D;
+                    $inverse_flag{$issn2}->{$issn1} = $flag;
+                }
+                
+                $pairtable->setCell($r,$c,$cell_content);
+                
+                # set cell color
+                my $hue = 255*$D;
+                my $text_hue = 0;
+                if ( $hue < 150 ) { $text_hue = 210 }
+                if ( $hue < 50 )  { $text_hue = 153 }
+                my $color_bias = $hue * 0.75;
+                $pairtable->setCellStyle($r, $c, "color: rgb($text_hue,$text_hue,$text_hue); background-color: rgb($hue,$color_bias,$hue)");
+                ++$i;
+            }
             ++$k;
         }
+        push @results_HTML, $pairtable->getTable(); 
+        push @results_HTML, "<p>D values for the pairwise tests are shown (the higher the number, the more different are the journals' citation distributions). An '*' indicates that the difference is significant after Bonferroni correction at an alpha value of $alpha.</p>";
     }
-    $stattable->print;
-   
-    if ( $k > 1 ) {
-        
-        # Independent nominal variables (groups) ANOVA - NON-parametric
-        print_KW_intro();
-        
-        my %res = $aov->anova(independent => 1, parametric => 0);
-        print "<h4>Kruskal-Wallis</h4>\n";
-        my $kwtable = new HTML::Table( 
-            -head=> ['H', 'p-value'], 
-            -data=> [[sprintf("%.4g",$res{h_value}), sprintf("%.4g", $res{p_value})]] 
-            );
-        $kwtable->print;
-        
-        # Run pairwise
-        if ( $res{'p_value'} <= 0.05 ) {
-            print "<h4>Pairwise tests</h4>\n";
-            my @short_journal_names = map { $journal_names{$_}->{'short-container-title'} } @issn_clean;
-            my $pair_result = $aov->compare(independent => 1, parametric => 0, tails => 2, flag => 1, alpha => .05, dump => 0);
-            my $pairtable = new HTML::Table( -width=>'70%', -data=>[['', @short_journal_names]] );
-            my $k = 1;
-            my $col_width = 100/(@issn_clean+1);
-            foreach (@issn_clean) {
-                my $i = 1;
-                my $r = $k + 1;
-                my $jname = shift @short_journal_names;
-                $pairtable->setCell($r,1,$jname);
-                foreach (@issn_clean) {
-                    my $c = $i + 1;
-                    if ( $k == 1) { $pairtable->setColWidth($c, "$col_width\%") }
-                    
-                    my $z_value = 0;
-                    my $flag = 0;
-                    if ( $i == $k ) {
-                        $pairtable->setCell($r,$c,'-');
-                    } elsif ( $k < $i ) { 
-                        $flag = $pair_result->{"$k,$i"}->{'flag'};
-                        $z_value = abs($pair_result->{"$k,$i"}->{'z_value'});
-                    } elsif ( $i < $k ) {
-                        $flag = $pair_result->{"$i,$k"}->{'flag'};
-                        $z_value = abs($pair_result->{"$i,$k"}->{'z_value'});
-                    }
-                    my $cell_content = sprintf("%.4g", $z_value);
-                    $cell_content .= '*' if ( $flag );
-                    $pairtable->setCell($r,$c,$cell_content);
-                    
-                    # set cell color
-                    my $hue = $z_value*25;
-                    $hue = 255 if ($hue > 255);
-                    my $text_hue = 0;
-                    if ( $hue < 150 ) { $text_hue = 255 }
-                    if ( $hue < 50 )  { $text_hue = 153 }
-                    my $color_bias = $hue * 0.75;
-                    $pairtable->setCellStyle($r, $c, "color: rgb($text_hue,$text_hue,$text_hue); background-color: rgb($hue,$color_bias,$hue)");
-                    ++$i;
-                }
-                ++$k;
-            }
-            $pairtable->print; 
-            print "<p>Z values for the pairwise tests are shown (the higher the number, the more different are the journal's citation distributions). An '*' indicates that the difference is significant after Bonferroni correction at an alpha value of 0.05.</p>";
-        }
-    }
+    print "</pre></div>\n"; # Here I am closing the status section. This is not ideal since I am generating a div across two subroutines...
+    $| = 0;  
+    
+    foreach ( @results_HTML ) { print $_; } 
     
     # Create top ten lists
     print "<h2>Top $top_num cited papers for each journal</h2>\n";
     print "<p>citation counts in parentheses</p>\n";
-    foreach ( @issn_clean ) {
-        print "<h3>$journal_names{$_}->{'container-title'}</h3>\n";
+    foreach my $issn ( @issn_clean ) {
+        print "<h3>$top_pubs{$issn}->[0]->{'container-title'}->[0]</h3>\n";
         print "<ol>\n";
-        for my $k ( 0..9 ) {
-            my $doi = $journal_dois{$_}->[$k];
-            print "<li><a href=\"https://doi.org/$doi\">$titles{$doi}</a> ($citation_counts{$doi})</li>\n";
+        foreach ( @{$top_pubs{$issn}} ) {
+            my $doi = $_->{'DOI'};
+            my $title = $_->{'title'}->[0];
+            my $is_ref_by = $_->{'is-referenced-by-count'};
+            print "<li><a href=\"https://doi.org/$doi\">$title</a> ($is_ref_by)</li>\n";
         }
         print "</ol>\n";
     }
     
-    drawChart (\%cdfs);  
+    drawChart (\%ecdf);  
     print "</div>\n";
     print "<p class=\"flip\" id=\"status_button\" onclick=\"toggleSta()\">Show Status</p>\n";
 }
@@ -302,7 +310,7 @@ sub make_results {
 
 # Writes a Chart.js javascript with cumulative distribution plots
 sub drawChart {
-    my %cdfs = %{$_[0]}; 
+    my %ecdf = %{$_[0]}; 
     my $x_scale;
     if ($log) { $x_scale = 'logarithmic' }
     else { $x_scale = 'linear' }
@@ -327,16 +335,14 @@ EOF
 #############################
 
     my $k = 0; 
-    foreach (keys %cdfs) {
-        my $issn = $_;
+    foreach my $issn (@issn_clean) {
 
-        my @cite_nums_sorted = sort { $a <=> $b } (keys %{$cdfs{$issn}});
         print "," if $k;
         
 ####### start a new data series
         print <<EOF;
         {
-           label: '$journal_names{$issn}->{'container-title'}',
+           label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
            steppedLine: 'after',
            showLine: 'true',
            backgroundColor: "$bgcolors[$k]",
@@ -346,9 +352,13 @@ EOF
         ++$k;
             
         my $i = 0;
-        foreach (@cite_nums_sorted) {
-            print "," if $i; ++$i; 
-            print "             {x: $_, y: $cdfs{$issn}->{$_}}";
+        my $max = $#{$ecdf{$issn}};
+        foreach ( 0 .. $max ) {
+            if ( defined $ecdf{$issn}->[$_] ) {
+                my $y = sprintf("%.3f", $ecdf{$issn}->[$_]);
+                print "," if $i; ++$i; 
+                print "             {x: $_, y: $y}";
+            }
         }
         print "           ]
         }"; #closes data
@@ -403,7 +413,7 @@ sub get_crossref_metadata {
     
     my $ua = LWP::UserAgent->new;
     $ua->timeout($timeout);
-    $ua->agent("$uaheader"); 
+    $ua->agent($uaheader); 
     
     foreach ($start .. $end) {
         my $year = $_; 
@@ -455,6 +465,40 @@ sub get_crossref_metadata {
         push @results, @temp_results;
     }
     return @results;
+}
+
+sub KS_test_discrete {
+    my @ecdf1 = @{$_[0]};
+    my $n1 = $_[1];
+    my @ecdf2 = @{$_[2]};
+    my $n2 = $_[3];
+    my $alpha = $_[4];
+    
+    my $D = 0;
+    my $Dcrit = sqrt(-log($alpha/2) * 0.5) * sqrt(($n1+$n2)/($n1*$n2));
+    my $max;
+    
+    if ( $#ecdf1 > $#ecdf2 ) {
+        $max = $#ecdf1;
+    } else {
+        $max = $#ecdf2;
+    }
+    
+    my $f1 = 0;
+    my $f2 = 0;
+    foreach ( 0 .. $max ) {
+        if ( defined $ecdf1[$_] ) { $f1 = $ecdf1[$_] }
+        if ( defined $ecdf2[$_] ) { $f2 = $ecdf2[$_] }
+        
+        my $tempD = abs( $f1 - $f2 );
+        $D = $tempD if ( $tempD > $D );
+    }
+    #print "Comparing D $D to Dcrit $Dcrit, where n is $n1 and m $n2, at alpha $alpha.\n";
+    if ( $D > $Dcrit ) {
+        return $D, 1;
+    } else {
+        return $D, 0;
+    }
 }
 
 
@@ -692,6 +736,10 @@ sub print_intro {
   generated, especially if you are comparing journals with thousands of 
   publications per year.</p> 
   
+  <p>The hypothesis that the distributions are distinct is evaluated using pairwise 
+  <a href="https://en.wikipedia.org/wiki/Kolmogorov-Smirnov_test">Kolmogorov-Smirnov 
+  tests</a>.</p> 
+  
   <p>For efficiency, the tool caches data for seven days, which might introduce 
   some small variation relative to the current CrossRef numbers.</p>
 </div>
@@ -744,7 +792,7 @@ sub print_prompt {
     var start = 1900; 
     var end = new Date().getFullYear(); 
     select = document.getElementById("year");
-    for(var year = start ; year <end; year++){ 
+    for(var year = start ; year <=end; year++){ 
         var opt = document.createElement('option');
         opt.value = year;
         opt.innerHTML = year;
@@ -761,18 +809,6 @@ sub print_prompt {
 	
 EOF
 
-}
-
-sub print_KW_intro {
-    
-    print <<EOF;
-<h3>Non-parametric ANOVA</h3>
-<p>The <a href="https://en.wikipedia.org/wiki/Kruskal-Wallis_one-way_analysis_of_variance">Kruskal Wallis H test</a> 
-is used to determine whether there are significant differences in the citation distributions. Pairwise Mann-Whitney 
-U tests are then conducted, if justified, by the Steel-Dwass procedure.</p>
-
-EOF
-       
 }
 
 sub print_menu {

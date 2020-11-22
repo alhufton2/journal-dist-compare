@@ -725,7 +725,7 @@ sub print_intro {
     
 <div class="intro">
   <p>Compare the citation distributions for up to four selected journals using 
-  publically available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
+  publicly available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
   Enter the ISSN for each journal of interest. <a href="https://portal.issn.org/">Find journal ISSNs here.</a>
   All publications categorized as 'journal-article' by CrossRef are included. 
   Please note that this is likely to include corrections and editorial content, 
@@ -813,6 +813,6 @@ EOF
 
 sub print_menu {
     print <<EOF;
-<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; tools &#9657; journal compare tool</p></div>
+<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; <a href="https://alhufton.com/tools/">tools</a> &#9657; journal compare tool</p></div>
 EOF
 }
