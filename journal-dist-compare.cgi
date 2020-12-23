@@ -1,4 +1,4 @@
-#!/opt/local/bin/perl
+#!/usr/bin/perl
 
 # use the shebang line below when running at bluehost
 #   !/usr/bin/perlml
@@ -22,6 +22,7 @@ use CGI::Simple;
 $CGI::Simple::NO_UNDEF_PARAMS = 1;
 my $q = CGI::Simple->new;
 $q->charset('utf-8');      # set the charset
+$q->no_cache(1); 
 
 # Load other packages
 use CHI; 
@@ -42,7 +43,7 @@ my $cache = CHI->new( driver => 'File' );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
-my $contact_email = 'enter email here';
+my $contact_email = 'enter your email address';
 my $timeout = 60;
 my $cache_time = '7 days';
 my $top_num = 10; 
@@ -56,7 +57,9 @@ binmode(STDOUT, ":utf8");
 my @issn_clean;
 my $start_year;
 my $end_year;
-my $log; 
+my $log;
+my $downloadISSN;
+my $downloadYear;
 
 # main data variables
 my %citation_counts; # ISSN->Stat Discrete obj
@@ -67,25 +70,31 @@ print "Content-Type: text/html; charset=utf-8\n\n";
 start_html();
 print_header();
 print_menu();
+
+# Open the central portion of the page, which will consist of two columns
 opendiv("row");
-if ( $q->param && clean_parameters($q) ) { #fills @issn_clean, $start_year, $end_year
-    opendiv("column side");
-    print_prompt();
-    closediv(); # close column side
-    
-    opendiv("column main");
-    get_data();
-    make_results();
-    closediv(); # close column main
-} else {
-    opendiv("column side");
-    print_prompt();
-    closediv(); # close column side
-    
-    opendiv("column main");
-    print_intro();
-    closediv(); # close column main
+	
+# Parse parameters, and create the content in the main righthand column
+opendiv("column main");
+my $error = 0;
+if ( $q->param ) { 
+	if ( clean_parameters($q) ) {
+
+		if ( $downloadISSN && $downloadYear ) { 
+			$error = 1 unless get_crossref_metadata($downloadISSN, $downloadYear, $uaheader);
+		}
+		make_results() if load_data();
+	} else { $error = 1; }
+} elsif ( $error == 0 ) {
+	print_intro();
 }
+closediv();	# close main column
+
+# Create lefthand entry form
+opendiv("column side");
+print_prompt();
+closediv(); # close column side
+
 closediv(); # close row
 print_tail();
 
@@ -113,61 +122,99 @@ sub clean_parameters {
     if ( $form->param('log') ) { $log = 1 } 
     else { $log = 0 }
     
+    # Download parameters
+    if ( $form->param('dISSN') ) {
+        my $issn_object = Business::ISSN->new( $form->param('dISSN') );
+        if ( $issn_object && $issn_object->is_valid() ) { $downloadISSN = $issn_object->as_string; }
+        else { print "<p>ISSN provided for download is invalid.</p>"; return 0; }
+    }
+    
+    if ( $form->param('dYear') ) {
+    	if ( $form->param('dYear') =~ /^(19|20)[0-9][0-9]/ ) {
+    		$downloadYear = $form->param('dYear'); 
+    	} else {
+    		die "<p>Bad download year provided.</p>"; return 0;
+    	}
+    }
+    	
     return 1; 
     
 }
-    
-sub get_data {     
-    # force a print flush, so that user sees a more complete html page while waiting for work to finish
-    $| = 1; 
-    
-    print "<div id=\"status\">\n";
-    print "<pre>\n";
-    print "Compiling citation data. This could take up to several minutes.\n";
-    
-    foreach ( @issn_clean ) {
-        print "Obtaining citation metadata for journal $_.\n";
-        my @results = get_crossref_metadata($_, $start_year, $end_year, $uaheader);
-        print "Processing metadata for journal $_.\n";
-        if ( @results ) {
-            
-            $citation_counts{$_} = new Statistics::Descriptive::Discrete;
-            
-            my $min;
-            foreach my $item ( @results ) {
-                if ( $item->{'is-referenced-by-count'} ) {
-                   $citation_counts{$_}->add_data($item->{'is-referenced-by-count'});
- 
-                    ### partial sorting algorithm ######
-                    my $k = 0;
-                    my $added = 0;
-                    if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
-                        foreach my $item2 ( @{$top_pubs{$_}} ) {
-                            last if ( $k > $top_num );
-                            if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
-                                splice @{$top_pubs{$_}}, $k, 0, $item;
-                                pop @{$top_pubs{$_}} if ( @{$top_pubs{$_}} > $top_num ); 
-                                $min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
-                                $added = 1;
-                                last;
-                            }
-                            ++$k;
-                        }
-                    }
-                    if ( $added == 0 && @{$top_pubs{$_}} < $top_num ) { 
-                        push @{$top_pubs{$_}}, $item;
-                    }
-                    
-                    ####################################          
-                    
-                } else {
-                    $citation_counts{$_}->add_data(0);
-                }
-            }
-        } else { die "No items in CrossREF result for $_\n\n"; }
+
+# Load data from the cache into the main variables
+sub load_data {     
+	my @download_buttons;
+	
+    foreach my $issn ( @issn_clean ) {
+    	my @results;
+    	my $success = 1; 
+    	foreach my $year ($start_year .. $end_year) {
+    		my $cache_id = "$year-$issn";
+    		my $cache_results = $cache->get($cache_id);
+    		if ( defined $cache_results ) {
+    			push @results, @$cache_results;
+    		} else {
+    			$success = 0;
+    			my $url = $q->url(-relative=>1, -query=>1);
+    			$url =~ s/&dISSN.*$//;
+    			$url .= "&dISSN=$issn&dYear=$year";
+    			my $download = <<EOF;
+<a style="background: #7bc74d; display: inline-block; margin: 5px; padding: 15px; color: #fff;" href="$url">Download $year for journal $issn</a>
+EOF
+    			push @download_buttons, $download; 
+    		}
+    	} 	
+        
+    	if ( $success ) {
+			if ( @results ) {
+				$citation_counts{$issn} = new Statistics::Descriptive::Discrete;
+				
+				my $min;
+				foreach my $item ( @results ) {
+					if ( $item->{'is-referenced-by-count'} ) {
+					   $citation_counts{$issn}->add_data($item->{'is-referenced-by-count'});
+	 
+						### partial sorting algorithm ######
+						my $k = 0;
+						my $added = 0;
+						if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
+							foreach my $item2 ( @{$top_pubs{$issn}} ) {
+								last if ( $k > $top_num );
+								if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
+									splice @{$top_pubs{$issn}}, $k, 0, $item;
+									pop @{$top_pubs{$issn}} if ( @{$top_pubs{$issn}} > $top_num ); 
+									$min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
+									$added = 1;
+									last;
+								}
+								++$k;
+							}
+						}
+						if ( $added == 0 && @{$top_pubs{$issn}} < $top_num ) { 
+							push @{$top_pubs{$issn}}, $item;
+						}         
+						####################################          
+						
+					} else {
+						$citation_counts{$issn}->add_data(0);
+					}
+				}
+			} else { die "No items in CrossREF result for $issn\n\n"; }  # This really shouldn't be happening at this stage. 
+		}
     }
     
-    print "Running calculations\n";  
+    if ( @download_buttons ) {
+
+    	print "<h2>Citation metadata needs to be downloaded</h2>\n";
+    	print "<p>Click each button and wait for download to complete. Download of each may take up to a minute.</p>\n";
+    	print "<div style=\"margin: 25px\">\n";
+    	foreach ( @download_buttons ) {
+    		print;
+    	}
+    	closediv();
+    	return 0;
+    }
+    return 1;  
 }
 
 sub make_results {
@@ -177,18 +224,16 @@ sub make_results {
     my @results_HTML;
     my $j_num = scalar @issn_clean;
     
-    push @results_HTML, "<p class=\"flip\" id=\"results_button\" onclick=\"toggleRes()\">Show Results</p>\n";
-
     # Place the distribution chart
-    push @results_HTML, "<div id=\"results\">\n";
-    push @results_HTML, "<h2>Empirical cumulative distribution plots</h2>\n";
-    push @results_HTML,  "<canvas id=\"myChart\"></canvas>\n";
+    print "<div id=\"results\">\n";
+    print "<h2>Empirical cumulative distribution plots</h2>\n";
+    print  "<canvas id=\"myChart\"></canvas>\n";
     
     # output some basic summary stats
-    push @results_HTML, "<h2>Summary statistics</h2>\n";
-    push @results_HTML, "<p>for journal articles published in $start_year";
-    if ($end_year == $start_year) { push @results_HTML, "</p>\n"; }
-    else { push @results_HTML, " to $end_year</p>\n"; }
+    print "<h2>Summary statistics</h2>\n";
+    print "<p>for journal articles published in $start_year";
+    if ($end_year == $start_year) { print "</p>\n"; }
+    else { print " to $end_year</p>\n"; }
     my $stattable = new HTML::Table( -head=>['Journal', 'ISSN', 'Count', 'Mean', 'Median', 'Variance'] );
     $stattable->setRowHead(1);
    
@@ -211,13 +256,12 @@ sub make_results {
             sprintf("%.2f", $citation_counts{$issn}->variance())
             );
     }
-    push @results_HTML, $stattable->getTable();
+    print $stattable->getTable();
    
     if ( $j_num > 1 ) {
         
         # Running the Kolmogorov-Smirnov pairwise tests
-        push @results_HTML, "<h3>Kolmogorov-Smirnov tests</h3>\n";
-        print "Running pairwise KS tests.\n";
+        print "<h3>Kolmogorov-Smirnov tests</h3>\n";
         my @short_journal_names;
         foreach my $issn (@issn_clean) {
             if ( $top_pubs{$issn}->[0]->{'short-container-title'}->[0] ) {
@@ -279,13 +323,9 @@ sub make_results {
             }
             ++$k;
         }
-        push @results_HTML, $pairtable->getTable(); 
-        push @results_HTML, "<p>D values for the pairwise tests are shown (the higher the number, the more different are the journals' citation distributions). An '*' indicates that the difference is significant after Bonferroni correction at an alpha value of $alpha.</p>";
+        print $pairtable->getTable(); 
+        print "<p>D values for the pairwise tests are shown (the higher the number, the more different are the journals' citation distributions). An '*' indicates that the difference is significant after Bonferroni correction at an alpha value of $alpha.</p>";
     }
-    print "</pre></div>\n"; # Here I am closing the status section. This is not ideal since I am generating a div across two subroutines...
-    $| = 0;  
-    
-    foreach ( @results_HTML ) { print $_; } 
     
     # Create top ten lists
     print "<h2>Top $top_num cited papers for each journal</h2>\n";
@@ -304,7 +344,6 @@ sub make_results {
     
     drawChart (\%ecdf);  
     print "</div>\n";
-    print "<p class=\"flip\" id=\"status_button\" onclick=\"toggleSta()\">Show Status</p>\n";
 }
 
 
@@ -403,11 +442,10 @@ EOF
 }
 
 
-# a valid ISSN, start year and end year
+# a valid ISSN and year, and the uaheader
 sub get_crossref_metadata {
     my $issn = shift;
-    my $start = shift;
-    my $end = shift;
+    my $year = shift;
     my $uaheader = shift;
     my @results; # array of hashes with {title, doi, is-referenced-by-count} 
     
@@ -415,56 +453,44 @@ sub get_crossref_metadata {
     $ua->timeout($timeout);
     $ua->agent($uaheader); 
     
-    foreach ($start .. $end) {
-        my $year = $_; 
-    
-        my $result_num = 0;
-        my $first = 1;   
-        my $offset = 0;
-        
-        my $cache_id = "$year-$issn";
-        
-        my $cache_results = $cache->get($cache_id);
-        if ( defined $cache_results ) {
-            push @results, @$cache_results;
-            print "Using cached data for year $year\n";
-            next;
-        }
-        
-        my @temp_results;
-        
-        while ( $result_num > 0 || $first ) {
-            my $rows; 
-            print "Requesting data from CrossRef for year $year (offset: $offset)\n";
-            my $response = $ua->get(
-                "https://api.crossref.org/journals/$issn/works?filter=from-pub-date:$year,until-pub-date:$year,type:journal-article&rows=1000&offset=$offset&select=DOI,title,is-referenced-by-count,container-title,short-container-title"
-                );
-            if ($response->is_success) {
-                my $metadata = decode_json $response->content;
-                if ( $first ) {
-                    $first = 0;
-                    if ( $metadata->{'message'}->{'total-results'} ) { $result_num = $metadata->{'message'}->{'total-results'}; }
-                    if ( $result_num == 0 ) { return; }
-                    if ( $result_num >= 10000 ) { print "<p>WARNING: More than 10000 items found for $issn in $year. Skipping it.</p>\n"; return; }
-                }
-                if ( @{$metadata->{'message'}->{'items'}} ) {
-                    foreach my $item ( @{$metadata->{'message'}->{'items'}} ) {
-                        push @temp_results, $item;
-                    }
-                }
-            } else {
-                print "<p>WARNING: CrossRef call failed for $issn. ";
-                print "Journals may have more than one ISSN, and may not register all with CrossRef.";
-                print " (" . $response->status_line . "). </p>"; 
-                return;
-            }
-            $offset += 1000;
-            $result_num -= 1000;
-        }
-        $cache->set($cache_id, \@temp_results, $cache_time);
-        push @results, @temp_results;
-    }
-    return @results;
+	my $result_num = 0;
+	my $first = 1;
+	my $next_cursor = '*'; 
+	
+	my $cache_id = "$year-$issn";
+	
+	$| = 1;
+	print "<p>";
+	while ( $result_num > 0 || $first ) {
+		my $rows; 
+		print ".";
+		my $response = $ua->get(
+			"https://api.crossref.org/journals/$issn/works?filter=from-pub-date:$year,until-pub-date:$year,type:journal-article&rows=1000&select=DOI,title,is-referenced-by-count,container-title,short-container-title&cursor=$next_cursor"
+			);
+		if ($response->is_success) {
+			my $metadata = decode_json $response->content;
+			if ( $first ) {
+				$first = 0;
+				if ( $metadata->{'message'}->{'total-results'} ) { $result_num = $metadata->{'message'}->{'total-results'}; }
+				if ( $result_num == 0 ) { print "<p>WARNING: No results for $issn in $year.</p>\n"; return 0; }
+				if ( $result_num >= 10000 ) { print "<p>WARNING: More than 10000 items found for $issn in $year. Please remove this journal from the comparison.</p>\n"; return 0; }
+			}
+			if ( $metadata->{'message'}->{'next-cursor'} ) { $next_cursor = $metadata->{'message'}->{'next-cursor'}; }
+			if ( @{$metadata->{'message'}->{'items'}} ) {
+				foreach my $item ( @{$metadata->{'message'}->{'items'}} ) {
+					push @results, $item;
+				}
+			}
+		} else {
+			print "<p>WARNING: CrossRef call failed for $issn.(" . $response->status_line . "). </p>"; 
+			return 0;
+		}
+		$result_num -= 1000;
+	}
+	print "</p>\n";
+	$| = 0;
+	$cache->set($cache_id, \@results, $cache_time);
+	print "<p>Citation metadata for ISSN $issn for year $year successfully downloaded.</p>";
 }
 
 sub KS_test_discrete {
@@ -659,30 +685,7 @@ table, th, td {
     width: 100\%;
   }
 }
-
-#results, #status_button {
-  display: none;
-}
-
 </style>
-
-<script>
-function toggleRes() {
-    document.getElementById("results").style.display = "block";
-    document.getElementById("status").style.display = "none";
-    document.getElementById("status_button").style.display = "block";
-    document.getElementById("results_button").style.display = "none";
-}
-</script>
-
-<script>
-function toggleSta() {
-    document.getElementById("results").style.display = "none";
-    document.getElementById("status").style.display = "block";
-    document.getElementById("results_button").style.display = "block";
-    document.getElementById("status_button").style.display = "none";
-}
-</script>
 
 </head>
 <body>
@@ -725,7 +728,7 @@ sub print_intro {
     
 <div class="intro">
   <p>Compare the citation distributions for up to four selected journals using 
-  publicly available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
+  publically available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
   Enter the ISSN for each journal of interest. <a href="https://portal.issn.org/">Find journal ISSNs here.</a>
   All publications categorized as 'journal-article' by CrossRef are included. 
   Please note that this is likely to include corrections and editorial content, 
@@ -813,6 +816,6 @@ EOF
 
 sub print_menu {
     print <<EOF;
-<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; <a href="https://alhufton.com/tools/">tools</a> &#9657; journal compare tool</p></div>
+<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; tools &#9657; journal compare tool</p></div>
 EOF
 }
