@@ -22,11 +22,13 @@ use CGI::Simple;
 $CGI::Simple::NO_UNDEF_PARAMS = 1;
 my $q = CGI::Simple->new;
 $q->charset('utf-8');      # set the charset
-$q->no_cache(1); 
+$q->no_cache(1);
 
 # Load other packages
+
 use CHI; 
 use Encode;
+use Proc::Daemon;
 use Statistics::Descriptive::Discrete;
 use HTML::Table;
 use Business::ISSN;
@@ -38,17 +40,17 @@ use open qw( :encoding(UTF-8) :std );
 my $tool_url = $q->url();
 
 # Open the cache
-my $cache = CHI->new( driver => 'File' );
-# my $cache = CHI->new( driver => 'File', root_dir => '/home3/alhufton/tmp/journal-compare' );
+my $tempdir_path = 'path/to/temp/dir';
+my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
 my $contact_email = 'enter your email address';
-my $timeout = 60;
+my $timeout = 300;
 my $cache_time = '7 days';
 my $top_num = 10; 
 my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
-my $uaheader = "Journal Distribution Compare Tool/alpha (https://alhufton.com, mailto:$contact_email)";
+my $uaheader = "Journal Distribution Compare Tool/beta (https://alhufton.com; mailto:$contact_email)";
 my $alpha = 0.05; 
 
 binmode(STDOUT, ":utf8");
@@ -58,15 +60,13 @@ my @issn_clean;
 my $start_year;
 my $end_year;
 my $log;
-my $downloadISSN;
-my $downloadYear;
 
 # main data variables
 my %citation_counts; # ISSN->Stat Discrete obj
 my %top_pubs;        # array per ISSN of CrossRef items, top ten guaranteed to be sorted
 
 # Main body 
-print "Content-Type: text/html; charset=utf-8\n\n";
+print $q->header();
 start_html();
 print_header();
 print_menu();
@@ -79,10 +79,6 @@ opendiv("column main");
 my $error = 0;
 if ( $q->param ) { 
 	if ( clean_parameters($q) ) {
-
-		if ( $downloadISSN && $downloadYear ) { 
-			$error = 1 unless get_crossref_metadata($downloadISSN, $downloadYear, $uaheader);
-		}
 		make_results() if load_data();
 	} else { $error = 1; }
 } elsif ( $error == 0 ) {
@@ -121,100 +117,94 @@ sub clean_parameters {
     $end_year = $start_year + $form->param('interval') - 1;  
     if ( $form->param('log') ) { $log = 1 } 
     else { $log = 0 }
-    
-    # Download parameters
-    if ( $form->param('dISSN') ) {
-        my $issn_object = Business::ISSN->new( $form->param('dISSN') );
-        if ( $issn_object && $issn_object->is_valid() ) { $downloadISSN = $issn_object->as_string; }
-        else { print "<p>ISSN provided for download is invalid.</p>"; return 0; }
-    }
-    
-    if ( $form->param('dYear') ) {
-    	if ( $form->param('dYear') =~ /^(19|20)[0-9][0-9]/ ) {
-    		$downloadYear = $form->param('dYear'); 
-    	} else {
-    		die "<p>Bad download year provided.</p>"; return 0;
-    	}
-    }
     	
     return 1; 
-    
 }
 
 # Load data from the cache into the main variables
-sub load_data {     
-	my @download_buttons;
+sub load_data { 
 	
+    my $status_table = new HTML::Table( -head=>['ISSN', 'Year', 'Status'] );	
+    $status_table->setRowHead(1);
+    my $success = 1;
+    my $fail = 0;
+    
+    # First check if any data need to be downloaded
     foreach my $issn ( @issn_clean ) {
     	my @results;
-    	my $success = 1; 
     	foreach my $year ($start_year .. $end_year) {
     		my $cache_id = "$year-$issn";
     		my $cache_results = $cache->get($cache_id);
-    		if ( defined $cache_results ) {
-    			push @results, @$cache_results;
-    		} else {
+    		if ( defined $cache_results && ref $cache_results ) {
+    			$status_table->addRow($issn, $year, 'Cached');
+    		} elsif ( defined $cache_results && length $cache_results ) {
+    			$status_table->addRow($issn, $year, $cache_results);
     			$success = 0;
-    			my $url = $q->url(-relative=>1, -query=>1);
-    			$url =~ s/&dISSN.*$//;
-    			$url .= "&dISSN=$issn&dYear=$year";
-    			my $download = <<EOF;
-<a style="background: #7bc74d; display: inline-block; margin: 5px; padding: 15px; color: #fff;" href="$url">Download $year for journal $issn</a>
-EOF
-    			push @download_buttons, $download; 
+    			unless ( $cache_results eq 'Downloading' ) { $fail = 1; }
+    		} else {
+    			$status_table->addRow($issn, $year, 'Initiating download');
+    			get_crossref_metadata($issn,$year,$uaheader); 
+    			$success = 0;
     		}
-    	} 	
-        
-    	if ( $success ) {
-			if ( @results ) {
-				$citation_counts{$issn} = new Statistics::Descriptive::Discrete;
-				
-				my $min;
-				foreach my $item ( @results ) {
-					if ( $item->{'is-referenced-by-count'} ) {
-					   $citation_counts{$issn}->add_data($item->{'is-referenced-by-count'});
-	 
-						### partial sorting algorithm ######
-						my $k = 0;
-						my $added = 0;
-						if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
-							foreach my $item2 ( @{$top_pubs{$issn}} ) {
-								last if ( $k > $top_num );
-								if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
-									splice @{$top_pubs{$issn}}, $k, 0, $item;
-									pop @{$top_pubs{$issn}} if ( @{$top_pubs{$issn}} > $top_num ); 
-									$min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
-									$added = 1;
-									last;
-								}
-								++$k;
-							}
-						}
-						if ( $added == 0 && @{$top_pubs{$issn}} < $top_num ) { 
-							push @{$top_pubs{$issn}}, $item;
-						}         
-						####################################          
-						
-					} else {
-						$citation_counts{$issn}->add_data(0);
-					}
-				}
-			} else { die "No items in CrossREF result for $issn\n\n"; }  # This really shouldn't be happening at this stage. 
-		}
+    	}
     }
     
-    if ( @download_buttons ) {
-
-    	print "<h2>Citation metadata needs to be downloaded</h2>\n";
-    	print "<p>Click each button and wait for download to complete. Download of each may take up to a minute.</p>\n";
-    	print "<div style=\"margin: 25px\">\n";
-    	foreach ( @download_buttons ) {
-    		print;
+    # If all are successfully in the cache, proceed to load the data 
+	if ( $success ) {
+		foreach my $issn ( @issn_clean ) {
+			my @results;
+			foreach my $year ($start_year .. $end_year) {
+				my $cache_id = "$year-$issn";
+				my $cache_results = $cache->get($cache_id);
+				push @results, @$cache_results;
+			}
+	
+			$citation_counts{$issn} = new Statistics::Descriptive::Discrete;
+			
+			my $min;
+			foreach my $item ( @results ) {
+				if ( $item->{'is-referenced-by-count'} ) {
+				   $citation_counts{$issn}->add_data($item->{'is-referenced-by-count'});
+ 
+					### partial sorting algorithm ######
+					my $k = 0;
+					my $added = 0;
+					if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
+						foreach my $item2 ( @{$top_pubs{$issn}} ) {
+							last if ( $k > $top_num );
+							if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
+								splice @{$top_pubs{$issn}}, $k, 0, $item;
+								pop @{$top_pubs{$issn}} if ( @{$top_pubs{$issn}} > $top_num ); 
+								$min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
+								$added = 1;
+								last;
+							}
+							++$k;
+						}
+					}
+					if ( $added == 0 && @{$top_pubs{$issn}} < $top_num ) { 
+						push @{$top_pubs{$issn}}, $item;
+					}         
+					####################################          
+					
+				} else {
+					$citation_counts{$issn}->add_data(0);
+				}
+			}
+		} 
+		return 1;  
+	} else {
+    	if ($fail) {
+    		print "<h2>Failed to obtain all citation data</h2>\n";
+    		print $status_table->getTable();
+    		print_fail_message(); 
+    	} else { 
+    		print "<h2>Citation data downloading</h2>\n";
+    		print $status_table->getTable();
+    		print_reload_message(); 
     	}
-    	closediv();
     	return 0;
     }
-    return 1;  
 }
 
 sub make_results {
@@ -343,7 +333,7 @@ sub make_results {
     }
     
     drawChart (\%ecdf);  
-    print "</div>\n";
+    closediv();
 }
 
 
@@ -431,7 +421,8 @@ EOF
                 labelString: 'Cumulative probability',
                 display: 'true',
                 fontSize: 16
-             }
+             },
+             ticks: { suggestedMin: 0 }
           }]
         }
     }
@@ -448,49 +439,64 @@ sub get_crossref_metadata {
     my $year = shift;
     my $uaheader = shift;
     my @results; # array of hashes with {title, doi, is-referenced-by-count} 
+    my $cache_id = "$year-$issn";
     
-    my $ua = LWP::UserAgent->new;
-    $ua->timeout($timeout);
-    $ua->agent($uaheader); 
+    # Place a marker in the cache to let other runs know we are downloading citation metadata for this journal & year
+    my $max_download_time = $timeout + 60;
+    $cache->set($cache_id, 'Downloading', $max_download_time);
     
-	my $result_num = 0;
-	my $first = 1;
-	my $next_cursor = '*'; 
+    # Establish daemon settings to fork off download operations
+    my $daemon = Proc::Daemon->new(
+    	work_dir => $tempdir_path,
+    	child_STDOUT => ">>$tempdir_path/stdout.txt",
+    	child_STDERR => ">>$tempdir_path/stderr.txt",
+    );
+    
+    my $child_1_PID = $daemon->Init;
+ 
+    unless ( $child_1_PID ) {
+
+		my $ua = LWP::UserAgent->new;
+		$ua->timeout($timeout);
+		$ua->agent($uaheader); 
+		
+		my $result_num = 0;
+		my $first = 1;
+		my $next_cursor = '*'; 
+		print "Attempting to obtain citation data from CrossRef for ISSN $issn in year $year.\n";
 	
-	my $cache_id = "$year-$issn";
-	
-	$| = 1;
-	print "<p>";
-	while ( $result_num > 0 || $first ) {
-		my $rows; 
-		print ".";
-		my $response = $ua->get(
-			"https://api.crossref.org/journals/$issn/works?filter=from-pub-date:$year,until-pub-date:$year,type:journal-article&rows=1000&select=DOI,title,is-referenced-by-count,container-title,short-container-title&cursor=$next_cursor"
-			);
-		if ($response->is_success) {
-			my $metadata = decode_json $response->content;
-			if ( $first ) {
-				$first = 0;
-				if ( $metadata->{'message'}->{'total-results'} ) { $result_num = $metadata->{'message'}->{'total-results'}; }
-				if ( $result_num == 0 ) { print "<p>WARNING: No results for $issn in $year.</p>\n"; return 0; }
-				if ( $result_num >= 10000 ) { print "<p>WARNING: More than 10000 items found for $issn in $year. Please remove this journal from the comparison.</p>\n"; return 0; }
-			}
-			if ( $metadata->{'message'}->{'next-cursor'} ) { $next_cursor = $metadata->{'message'}->{'next-cursor'}; }
-			if ( @{$metadata->{'message'}->{'items'}} ) {
-				foreach my $item ( @{$metadata->{'message'}->{'items'}} ) {
-					push @results, $item;
+		while ( $result_num > 0 || $first ) {
+			my $rows; 
+			my $response = $ua->get(
+				"https://api.crossref.org/journals/$issn/works?filter=from-pub-date:$year,until-pub-date:$year,type:journal-article&rows=1000&select=DOI,title,is-referenced-by-count,container-title,short-container-title&cursor=$next_cursor"
+				);
+			if ($response->is_success) {
+				my $metadata = decode_json $response->content;
+				if ( $first ) {
+					$first = 0;
+					if ( $metadata->{'message'}->{'total-results'} ) { $result_num = $metadata->{'message'}->{'total-results'}; }
+					if ( $result_num == 0 ) { print "WARNING: No results for $issn in $year.\n"; $cache->set($cache_id, "Failed (No results)", $timeout); exit; }
 				}
+				if ( $metadata->{'message'}->{'next-cursor'} ) { $next_cursor = $q->url_encode($metadata->{'message'}->{'next-cursor'}); }
+				if ( @{$metadata->{'message'}->{'items'}} ) {
+					foreach my $item ( @{$metadata->{'message'}->{'items'}} ) {
+						push @results, $item;
+					}
+				}
+			} else { 
+				my $fail_message = "Failed (" . $response->status_line . ").";
+				print "WARNING: CrossRef call failed for $issn. $fail_message.\n";
+				$cache->set($cache_id, $fail_message, $timeout);
+				exit;
 			}
-		} else {
-			print "<p>WARNING: CrossRef call failed for $issn.(" . $response->status_line . "). </p>"; 
-			return 0;
+			$result_num -= 1000;
 		}
-		$result_num -= 1000;
+		if ( @results ) {
+			$cache->set($cache_id, \@results, $cache_time);
+			print "Citation data for ISSN $issn for year $year successfully downloaded.\n";
+		}
+		exit;
 	}
-	print "</p>\n";
-	$| = 0;
-	$cache->set($cache_id, \@results, $cache_time);
-	print "<p>Citation metadata for ISSN $issn for year $year successfully downloaded.</p>";
 }
 
 sub KS_test_discrete {
@@ -688,7 +694,7 @@ table, th, td {
 </style>
 
 </head>
-<body>
+<body onLoad="timeRefresh(10000);">
     
 EOF
 
@@ -702,6 +708,34 @@ sub opendiv {
 sub closediv {
     print "</div>\n";
 }
+
+sub print_reload_message {
+	print <<EOF;
+	<p>Downloading data from CrossRef. This could take several minutes. Results 
+	will be automatically displayed when complete. You can bookmark this page, 
+	and close the window, if you want to check back on the results later.</p>
+
+	<script>
+      function timeRefresh(time) {
+        setTimeout("location.reload(true);", time);
+      }
+    </script>
+EOF
+}
+
+sub print_fail_message {
+	
+	print <<EOF;
+<p>Errors were encountered while trying to download some of the requested citation data. 
+'No results' may indicate that your journal of interest had no publications in the selected year, 
+or that the ISSN you used isn't the one the journal uses in its CrossRef metadata. 
+If a journal has more than one ISSN, the 'print' version is usually the one recognized 
+by CrossRef. 500 errors may simply indicate a timeout problem due to a slow connection. 
+Hit 'Go' again to retry.</p>
+EOF
+
+}
+
 
 sub print_header {
     print "<div class=\"header\"><h1><a href=\"$tool_url\">Compare journal citation distributions</a></h1></div>\n";
