@@ -1,8 +1,5 @@
 #!/usr/bin/perl
 
-# use the shebang line below when running at bluehost
-#   !/usr/bin/perlml
-
 use strict;
 use warnings;
 use utf8;
@@ -346,15 +343,16 @@ sub drawChart {
     
     # Define the colors that will be used for the four data series
     my @bgcolors = (
-        "rgba(153,255,51,0.4)",
-        "rgba(234,162,33,0.4)",
-        "rgba(0,220,153,0.4)",
-        "rgba(190,0,220,0.4)",
+        "rgba(153,255,51,0.6)",
+        "rgba(0,51,204,0.6)",
+        "rgba(252, 174, 30,0.6)",
+        "rgba(190,0,220,0.6)",
         );
     
 ###### start the Chart.js script #
     print <<EOF;
-<script>    
+<script>
+Chart.defaults.global.defaultFontColor = "rgb(190,190,190)";
 var ctx = document.getElementById('myChart').getContext('2d');
 var myChart = new Chart(ctx, {
   type: 'scatter',
@@ -412,7 +410,10 @@ EOF
                 labelString: 'Citations to paper since publication (log10)',
                 display: 'true',
                 fontSize: 16
-             }
+             },
+             gridLines: { 
+                color: 'rgb(50,50,50)'
+             },
           }],
           yAxes: [{
              type: 'linear',
@@ -422,7 +423,10 @@ EOF
                 display: 'true',
                 fontSize: 16
              },
-             ticks: { suggestedMin: 0 }
+             ticks: { suggestedMin: 0 },
+             gridLines: { 
+                color: 'rgb(50,50,50)'
+             },
           }]
         }
     }
@@ -475,7 +479,7 @@ sub get_crossref_metadata {
 				if ( $first ) {
 					$first = 0;
 					if ( $metadata->{'message'}->{'total-results'} ) { $result_num = $metadata->{'message'}->{'total-results'}; }
-					if ( $result_num == 0 ) { print "WARNING: No results for $issn in $year.\n"; $cache->set($cache_id, "Failed (No results)", $timeout); exit; }
+					if ( $result_num == 0 ) { print "<p>WARNING: No results for $issn in $year.</p>\n"; $cache->set($cache_id, "Failed (No results)", $timeout); exit; }
 				}
 				if ( $metadata->{'message'}->{'next-cursor'} ) { $next_cursor = $q->url_encode($metadata->{'message'}->{'next-cursor'}); }
 				if ( @{$metadata->{'message'}->{'items'}} ) {
@@ -602,7 +606,7 @@ table, th, td {
 
 .header a {
   text-decoration: none;
-  color: #ffbe61;
+  color: rgb(238, 238, 238);
 }
 
 /* Style the intro */
@@ -691,6 +695,7 @@ table, th, td {
     width: 100\%;
   }
 }
+
 </style>
 
 </head>
@@ -729,7 +734,7 @@ sub print_fail_message {
 <p>Errors were encountered while trying to download some of the requested citation data. 
 'No results' may indicate that your journal of interest had no publications in the selected year, 
 or that the ISSN you used isn't the one the journal uses in its CrossRef metadata. 
-If a journal has more than one ISSN, the 'print' version is usually the one recognized 
+If a journal has more than one ISSN, 'print' version is usually the one recognized 
 by CrossRef. 500 errors may simply indicate a timeout problem due to a slow connection. 
 Hit 'Go' again to retry.</p>
 EOF
@@ -850,6 +855,6 @@ EOF
 
 sub print_menu {
     print <<EOF;
-<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; tools &#9657; journal compare tool</p></div>
+<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; <a href="https://alhufton.com/tools/">tools</a> &#9657; journal compare tool</p></div>
 EOF
 }
