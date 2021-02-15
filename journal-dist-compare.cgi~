@@ -1,8 +1,5 @@
 #!/usr/bin/perl
 
-# use the shebang line below when running at bluehost
-#   !/usr/bin/perlml
-
 use strict;
 use warnings;
 use utf8;
@@ -40,13 +37,12 @@ use open qw( :encoding(UTF-8) :std );
 my $tool_url = $q->url();
 
 # Open the cache
-my $tempdir_path = '/Users/alhufton/Sites/tmp';
-# my $tempdir_path = '/home3/alhufton/tmp/journal-compare';
+my $tempdir_path = 'path/to/temp/dir';
 my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
-my $contact_email = 'enter email address';
+my $contact_email = 'enter your email address';
 my $timeout = 300;
 my $cache_time = '7 days';
 my $top_num = 10; 
@@ -76,7 +72,7 @@ print_menu();
 opendiv("row");
 	
 # Parse parameters, and create the content in the main righthand column
-opendiv("column-main");
+opendiv("column main");
 my $error = 0;
 if ( $q->param ) { 
 	if ( clean_parameters($q) ) {
@@ -88,7 +84,7 @@ if ( $q->param ) {
 closediv();	# close main column
 
 # Create lefthand entry form
-opendiv("column-side");
+opendiv("column side");
 print_prompt();
 closediv(); # close column side
 
@@ -225,7 +221,7 @@ sub make_results {
     print "<p>for journal articles published in $start_year";
     if ($end_year == $start_year) { print "</p>\n"; }
     else { print " to $end_year</p>\n"; }
-    my $stattable = new HTML::Table( -class=>'bordered', -head=>['Journal', 'ISSN', 'Count', 'Mean', 'Median', 'Variance'] );
+    my $stattable = new HTML::Table( -head=>['Journal', 'ISSN', 'Count', 'Mean', 'Median', 'Variance'] );
     $stattable->setRowHead(1);
    
     foreach my $issn ( @issn_clean ) {
@@ -261,7 +257,7 @@ sub make_results {
                 push @short_journal_names, $top_pubs{$issn}->[0]->{'container-title'}->[0];
             }
         }
-        my $pairtable = new HTML::Table( -class=>'bordered', -width=>'70%', -data=>[['', @short_journal_names]] );
+        my $pairtable = new HTML::Table( -width=>'70%', -data=>[['', @short_journal_names]] );
         
         my $col_width = 100/(@issn_clean+1);
         
@@ -286,7 +282,7 @@ sub make_results {
                 my $cell_content = 'ERROR';
                 
                 if ( $issn1 eq $issn2 ) {
-                    $cell_content = '-';
+                    $cell_content = 0;
                 } elsif ( defined $inverseD{$issn1}->{$issn2} ) {
                     $D = $inverseD{$issn1}->{$issn2};
                     $flag = $inverse_flag{$issn1}->{$issn2};
@@ -556,7 +552,152 @@ sub start_html {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.9.4/Chart.min.js"></script>
-<link rel="stylesheet" href="../css/tool.css">
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: Verdana, Geneva, sans-serif;
+  color: #999;
+  font-size: .9rem;
+  background-color: black;
+  max-width: 1000px;
+  margin: auto;
+  width: 100vw;
+  padding: 10px;
+
+}
+
+a, a:visited {
+  color: white;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+pre {
+  white-space: pre-wrap
+}
+
+table {
+  border-collapse: collapse;
+  margin-top: 5px;
+  margin-bottom: 10px;
+}
+
+table, th, td {
+  border: 1px solid white;
+  font-family: Verdana, Geneva, sans-serif;
+  color: #999;
+  font-size: .9rem;
+  padding: 5px;
+}
+
+/* Style the header */
+.header {
+  font-family: Arial, Helvetica, sans-serif;
+  padding: 5px;
+  text-align: left;
+  font-size: 1.1rem;
+}
+
+.header a {
+  text-decoration: none;
+  color: rgb(238, 238, 238);
+}
+
+/* Style the intro */
+.intro {
+  padding: 10px;
+  text-align: justify;
+}
+
+.results h3, .results h2, .results h4 {
+  color: #70db70;
+  font-weight: normal;
+}
+
+.button {
+  padding: 10px;
+}
+
+.flip {
+  font-size: 16px;
+  padding: 7px;
+  text-align: center;
+  background-color: darkgrey;
+  color: white;
+  border: solid 1px #a6d8a8;
+  margin: auto;
+  width: 50%;
+  margin-bottom: 1rem; 
+}
+
+.flip:hover {
+  color: #66ff66;
+  cursor: pointer; 
+}
+
+
+/* Create three equal columns that floats next to each other */
+.row {
+  border-top: 0.5px solid;
+  border-top-color: rgb(68,68,68);
+}
+
+.column {
+  float: left;
+}
+
+.column.side {
+  width: 20\%;
+  padding: 5px;
+}
+
+.column.main {
+  width: 80\%;
+  padding: 5px;
+}
+
+.column h2, h3, h4 {
+  margin-top: 0; 
+  color: #70db70;
+  font-weight: normal;
+}
+
+/* Clear floats after the columns */
+.row:after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+/* Style the footer */
+.footer {
+  padding: 10px;
+  text-align: right;
+  border-top: 1px solid;
+  border-top-color: rgb(68,68,68);
+}
+
+/* Style the breadcrumbs nav */
+.nav {
+  border-top: 1px solid;
+  border-top-color: rgb(68,68,68);
+}
+
+/* Responsive layout - makes the three columns stack on top of each other instead of next to each other */
+\@media screen and (max-width: 600px) {
+  .column.main, .column.side {
+    width: 100\%;
+  }
+}
+
+</style>
+
 </head>
 <body onLoad="timeRefresh(10000);">
     
