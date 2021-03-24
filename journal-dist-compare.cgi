@@ -38,6 +38,7 @@ use open qw( :encoding(UTF-8) :std );
 
 # Read in any CGI parameters and clean whitespace
 my $tool_url = $q->url();
+my $query_url = $q->url('-absolute'=>1, '-query'=>1);
 
 # Open the cache
 my $tempdir_path = '/Users/alhufton/Sites/tmp';
@@ -61,6 +62,7 @@ my @issn_clean;
 my $start_year;
 my $end_year;
 my $log;
+my $chart;
 
 # main data variables
 my %citation_counts; # ISSN->Stat Discrete obj
@@ -83,6 +85,7 @@ if ( $q->param ) {
 		make_results() if load_data();
 	} else { $error = 1; }
 } elsif ( $error == 0 ) {
+    $log = 1;
 	print_intro();
 }
 closediv();	# close main column
@@ -100,7 +103,7 @@ exit;
 sub clean_parameters {
     my $form = shift;
     
-     # Process and clean the ISSNs 
+    # Process and clean the ISSNs 
     if ( $form->param('ISSN') ) {
         foreach ( $form->param('ISSN') ) {
             s/\s+//g; 
@@ -115,10 +118,12 @@ sub clean_parameters {
     unless ( $form->param('interval') <= $max_interval ) { print "<p>Selected interval exceeds maximum allowed.</p>"; return 0; }
     
     $start_year = $form->param('start_year');
-    $end_year = $start_year + $form->param('interval') - 1;  
+    $end_year = $start_year + $form->param('interval') - 1;
     if ( $form->param('log') ) { $log = 1 } 
     else { $log = 0 }
-    	
+    $chart = 'ecdf';
+    if ( $form->param('chart') && $form->param('chart') eq 'pmf' ) { $chart = 'pmf' }
+
     return 1; 
 }
 
@@ -217,9 +222,25 @@ sub make_results {
     
     # Place the distribution chart
     print "<div id=\"results\">\n";
-    print "<h2>Empirical cumulative distribution plots</h2>\n";
+    if ( $chart eq 'ecdf' ) {
+        my $pmf_link = $query_url;
+        if ( $pmf_link =~ /chart=ecdf/ ) {
+            $pmf_link =~ s/chart=ecdf/chart=pmf/;
+        } else {
+            $pmf_link .= "&chart=pmf";
+        }
+        print "<h2>Empirical cumulative distribution function (eCDF)</h2>\n";
+        print "<p>Each point represents the fraction of papers (<em>y</em>) that have <em>x</em> or fewer citations. 
+        You may also view the distribution as a <a href=\"$pmf_link\">Probability Mass Function (PMF)</a>, a non-cumulative histogram-like representation.</p>\n";
+    } elsif ( $chart eq 'pmf' ) {
+        my $ecdf_link = $query_url;
+        $ecdf_link =~ s/chart=pmf/chart=ecdf/;
+        print "<h2>Probability mass function (PMF)</h2>\n"; 
+        print "<p>Each point represents the fraction of papers (<em>y</em>) that have exactly <em>x</em> citations.  
+        You may also view the distribution as an <a href=\"$ecdf_link\">Empirical Cumulative Distribution Function (eCDF)</a>, which generally offers more power to see genuine differences in the distributions.</p>\n";
+    } 
     print  "<canvas id=\"myChart\"></canvas>\n";
-    
+        
     # output some basic summary stats
     print "<h2>Summary statistics</h2>\n";
     print "<p>for journal articles published in $start_year";
@@ -234,7 +255,8 @@ sub make_results {
         my $f = $citation_counts{$issn}->frequency_distribution_ref(\@uniqs);
         my $i = 0;
         foreach ( @uniqs ) {
-            $i += $f->{$_};
+            $i = $f->{$_} if ( $chart eq 'pmf' );
+            $i += $f->{$_} if ( $chart eq 'ecdf' );
             $ecdf{$issn}->[$_] = $i/$n{$issn};
         } 
         
@@ -342,8 +364,19 @@ sub make_results {
 sub drawChart {
     my %ecdf = %{$_[0]}; 
     my $x_scale;
-    if ($log) { $x_scale = 'logarithmic' }
-    else { $x_scale = 'linear' }
+    my $log_label = '';
+
+    if ($log) { 
+        $x_scale = 'logarithmic';
+        $log_label = " (log10)";
+    } else { $x_scale = 'linear' }
+    
+    my $yaxis_label = "Cumulative probability";
+    my $xaxis_label = "Citations to paper since publication$log_label";
+    if ( $chart eq 'pmf' ) {
+        $yaxis_label = "Probability";
+        $xaxis_label = "Citations to paper since publication$log_label";
+    }
     
     # Define the colors that will be used for the four data series
     my @bgcolors = (
@@ -371,7 +404,9 @@ EOF
         print "," if $k;
         
 ####### start a new data series
-        print <<EOF;
+
+    if ( $chart eq 'ecdf' ) {
+       print <<EOF;
         {
            label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
            steppedLine: 'after',
@@ -379,6 +414,15 @@ EOF
            backgroundColor: "$bgcolors[$k]",
            data: [
 EOF
+    } elsif ( $chart eq 'pmf' ) {
+        print <<EOF;
+        {
+           label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
+           showLine: 'true',
+           backgroundColor: "$bgcolors[$k]",
+           data: [
+EOF
+    }
 ##############################
         ++$k;
             
@@ -411,7 +455,7 @@ EOF
              type: '$x_scale',
              position: 'bottom',
              scaleLabel: {
-                labelString: 'Citations to paper since publication (log10)',
+                labelString: '$xaxis_label',
                 display: 'true',
                 fontSize: 16
              },
@@ -423,7 +467,7 @@ EOF
              type: 'linear',
              position: 'left',
              scaleLabel: {
-                labelString: 'Cumulative probability',
+                labelString: '$yaxis_label',
                 display: 'true',
                 fontSize: 16
              },
@@ -541,12 +585,24 @@ sub KS_test_discrete {
     }
 }
 
+sub shuffle {
+
+    my $deck = shift;  # $deck is a reference to an array
+    return unless @$deck; # must not be empty!
+
+    my $i = 3;
+    my $k = @$deck;
+    while ($i >= 0 ) {
+        my $j = int rand ($k);
+        @$deck[$i,$j] = @$deck[$j,$i];
+        --$i;
+    }
+}
+
 
 ############################
 # HTML writing subroutines #
 ############################
-
-# Collapsible text box based on https://alligator.io/css/collapsible/
 
 sub start_html {
     print <<EOF;
@@ -622,6 +678,10 @@ EOF
 }
     
 sub print_intro {
+    my @issn_rand = ('1538-3598', '2052-4463', '1548-7105', '1866-3516', '1537-1719', '2046-1402', '1095-9203', '2054-5703', '2190-4286', '1097-2765', '1759-4812', '0305-1048', '1944-8007', '1313-2970', '1053-8119', '1368-423X', '1662-453X');
+    &shuffle(\@issn_rand);
+    my $year_rand = 2015 + int rand(4);
+    
     print <<EOF;
     
 <div class="intro">
@@ -643,6 +703,8 @@ sub print_intro {
   
   <p>For efficiency, the tool caches data for seven days, which might introduce 
   some small variation relative to the current CrossRef numbers.</p>
+  
+  <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true">Random Example</a>!</p>
 </div>
 
 EOF
@@ -654,6 +716,9 @@ sub print_prompt {
     my @issn_value;
     my $default_year = 2000;
     if ( $start_year ) { $default_year = $start_year;} 
+    my $log_checked = " checked=\"true\"" unless ( $log == 0 );
+    my $ecdf_checked = " checked=\"checked\"" unless ( $chart eq 'pmf' );
+    my $pmf_checked = " checked=\"checked\"" if ( $chart eq 'pmf' );
     
     foreach (0..3) {
         unless ( defined $issn_clean[$_] ) {
@@ -682,8 +747,13 @@ sub print_prompt {
   <h3>Publication years</h3>
   <p>start year&nbsp;<select id="year" name="start_year" required="true"></select></br>
   interval (yrs)&nbsp;<select id="interval" name="interval">$interval_opt</select></br>
-  <label for="log">logarithmic&nbsp;</label>
-  <input style="display:inline" type="checkbox" id="log" name="log" value="true" checked="true"></p>
+  <h3>Display options</h3>
+  <p><input type="radio" id="option1" name="chart" value="ecdf"$ecdf_checked>
+  <label for="option1">eCDF</label>
+  <input type="radio" id="option2" name="chart" value="pmf"$pmf_checked>
+  <label for="option2">PMF</label><br>  
+  <input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
+  <label for="log">logarithmic&nbsp;</label></p>
   
   <div class="button">
     <input type="submit" value="Go!" style="font-size : 20px;">

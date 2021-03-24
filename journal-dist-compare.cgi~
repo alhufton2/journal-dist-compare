@@ -125,7 +125,7 @@ sub clean_parameters {
 # Load data from the cache into the main variables
 sub load_data { 
 	
-    my $status_table = new HTML::Table( -head=>['ISSN', 'Year', 'Status'] );	
+    my $status_table = new HTML::Table( -class=>'bordered', -head=>['ISSN', 'Year', 'Status'] );	
     $status_table->setRowHead(1);
     my $success = 1;
     my $fail = 0;
@@ -664,7 +664,7 @@ sub print_prompt {
     }
     
     my $interval_opt ='';
-    foreach (0..$max_interval) {
+    foreach (0..$max_interval - 1) {
         my $num = $_ + 1;
         unless ($num == $q->param('interval') ) { $interval_opt .= "<option>$num</option>\n"; }
         else { $interval_opt .= "<option selected=\"selected\">$num</option>\n"; }
