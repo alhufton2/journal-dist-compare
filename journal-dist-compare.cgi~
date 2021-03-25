@@ -23,6 +23,8 @@ $CGI::Simple::NO_UNDEF_PARAMS = 1;
 my $q = CGI::Simple->new;
 $q->charset('utf-8');      # set the charset
 $q->no_cache(1);
+my $tool_url = $q->url();
+my $query_url = $q->url('-absolute'=>1, '-query'=>1);
 
 # Load other packages
 use CHI; 
@@ -34,10 +36,7 @@ use Business::ISSN;
 use LWP::UserAgent;
 use JSON::MaybeXS;
 use open qw( :encoding(UTF-8) :std );
-
-# Read in any CGI parameters and clean whitespace
-my $tool_url = $q->url();
-my $query_url = $q->url('-absolute'=>1, '-query'=>1);
+binmode(STDOUT, ":utf8");
 
 # Open the cache
 my $tempdir_path = '/Users/alhufton/Sites/tmp';
@@ -53,8 +52,6 @@ my $top_num = 10;
 my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
 my $uaheader = "Journal Distribution Compare Tool/beta (https://alhufton.com; mailto:$contact_email)";
 my $alpha = 0.05; 
-
-binmode(STDOUT, ":utf8");
 
 # main parameter variables
 my @issn_clean;
@@ -93,7 +90,6 @@ closediv();	# close main column
 opendiv("column-side");
 print_prompt();
 closediv(); # close column side
-
 closediv(); # close row
 print_tail();
 
@@ -214,7 +210,8 @@ sub load_data {
 
 sub make_results {
     
-    my %ecdf; # hash of arrays
+    my %ecdf; # hash of arrays. Always generated
+    my %pmf;  # hash of arrays. Only generated if chart = 'pmf'
     my %n;
     my @results_HTML;
     my $j_num = scalar @issn_clean;
@@ -230,13 +227,16 @@ sub make_results {
         }
         print "<h2>Empirical cumulative distribution function (eCDF)</h2>\n";
         print "<p>Each point represents the fraction of papers (<em>y</em>) that have <em>x</em> or fewer citations. 
-        You may also view the distribution as a <a href=\"$pmf_link\">Probability Mass Function (PMF)</a>, a non-cumulative histogram-like representation.</p>\n";
+        You may also view the distribution as a <a href=\"$pmf_link\">Probability Mass Function (PMF)</a>, a 
+        non-cumulative histogram-like representation. Click on the journal names below to toggle their display.</p>\n";
     } elsif ( $chart eq 'pmf' ) {
         my $ecdf_link = $query_url;
         $ecdf_link =~ s/chart=pmf/chart=ecdf/;
         print "<h2>Probability mass function (PMF)</h2>\n"; 
         print "<p>Each point represents the fraction of papers (<em>y</em>) that have exactly <em>x</em> citations.  
-        You may also view the distribution as an <a href=\"$ecdf_link\">Empirical Cumulative Distribution Function (eCDF)</a>, which generally offers more power to see genuine differences in the distributions.</p>\n";
+        You may also view the distribution as an <a href=\"$ecdf_link\">Empirical Cumulative Distribution Function 
+        (eCDF)</a>, which generally offers more power to see genuine differences in the distributions. Click on the 
+        journal names below to toggle their display.</p>\n";
     } 
     print  "<canvas id=\"myChart\"></canvas>\n";
         
@@ -254,9 +254,11 @@ sub make_results {
         my $f = $citation_counts{$issn}->frequency_distribution_ref(\@uniqs);
         my $i = 0;
         foreach ( @uniqs ) {
-            $i = $f->{$_} if ( $chart eq 'pmf' );
-            $i += $f->{$_} if ( $chart eq 'ecdf' );
+            $i += $f->{$_};
             $ecdf{$issn}->[$_] = $i/$n{$issn};
+            if ( $chart eq 'pmf') {
+                $pmf{$issn}->[$_] = $f->{$_}/$n{$issn};
+            }
         } 
         
         $stattable->addRow(
@@ -341,7 +343,9 @@ sub make_results {
     
     # Create top ten lists
     print "<h2>Top $top_num cited papers for each journal</h2>\n";
-    print "<p>citation counts in parentheses</p>\n";
+    print "<p>CrossRef citation counts are provided in parentheses. <a href=\"http://opencitations.net/\"><span style=\"color:rgb(153, 49, 252)\">Open</span><span style=\"color:rgb(45, 34, 222)\">Citations</span></a>
+    links can be used to search for open metadata on the citing articles, if available, through the OpenCitations.net service built by researchers at the University 
+    of Bologna and University of Oxford.</p>\n";
     foreach my $issn ( @issn_clean ) {
         print "<h3>$top_pubs{$issn}->[0]->{'container-title'}->[0]</h3>\n";
         print "<ol>\n";
@@ -349,12 +353,18 @@ sub make_results {
             my $doi = $_->{'DOI'};
             my $title = $_->{'title'}->[0];
             my $is_ref_by = $_->{'is-referenced-by-count'};
-            print "<li><a href=\"https://doi.org/$doi\">$title</a> ($is_ref_by)</li>\n";
+            my $safe_doi = $q->url_encode($doi);
+            my $occ_search = "https://opencitations.net/search?text=$safe_doi&rule=doi";
+            print "<li><div style=\"float:left;width:80%;\"><a href=\"https://doi.org/$doi\" target=\"_blank\">$title</a> ($is_ref_by)</div><div style=\"float:right;\"><a href=\"$occ_search\" target=\"_blank\"><span style=\"color:rgb(153, 49, 252)\">Open</span><span style=\"color:rgb(45, 34, 222)\">Citations</span></a></div><div style=\"clear:both;\"></div></li>\n";
         }
         print "</ol>\n";
     }
     
-    drawChart (\%ecdf);  
+    if ( $chart eq 'pmf' ) {
+        drawChart (\%pmf);
+    } else {
+        drawChart (\%ecdf);
+    }
     closediv();
 }
 
@@ -585,7 +595,6 @@ sub KS_test_discrete {
 }
 
 sub shuffle {
-
     my $deck = shift;  # $deck is a reference to an array
     return unless @$deck; # must not be empty!
 
@@ -597,7 +606,6 @@ sub shuffle {
         --$i;
     }
 }
-
 
 ############################
 # HTML writing subroutines #
@@ -704,6 +712,8 @@ sub print_intro {
   some small variation relative to the current CrossRef numbers.</p>
   
   <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true">Random Example</a>!</p>
+  
+  <p><a href="https://github.com/alhufton2/journal-dist-compare">Source code and methods&nbsp;▸</a></p>
 </div>
 
 EOF
