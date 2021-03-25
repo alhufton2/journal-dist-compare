@@ -4,13 +4,15 @@ This tool can be used to compare the citation distributions of up to four journa
 
 [A beta version of the tool is now live](https://alhufton.com/cgi-bin/journal-dist-compare.cgi).
 
-Citation distributions are displayed as either [empirical cumulative distributions functions (eCDF)](https://en.wikipedia.org/wiki/Empirical_distribution_function) or [probability mass functions (PMF)](https://en.wikipedia.org/wiki/Probability_mass_function). The eCDF options tends to offer more power to visualize real differences between the distributions, while the PMF option offers a histogram-like visualization that will be more familiar to many users. 
+Citation distributions are displayed as either [empirical cumulative distributions functions (eCDF)](https://en.wikipedia.org/wiki/Empirical_distribution_function) or [probability mass functions (PMF)](https://en.wikipedia.org/wiki/Probability_mass_function). The eCDF options tends to offer more power to visualize real differences between the distributions, while the PMF option offers a histogram-like visualization that will be familiar to more users. 
 
 The display defaults to visualizing the distributions in log10 space.  
 
 The hypothesis that the distributions are distinct is evaluated using pairwise [Kolmogorov-Smirnov tests](https://en.wikipedia.org/wiki/Kolmogorov-Smirnov_test).
 
 For each journal, the top ten most cited articles are listed for the selected period, with links to OpenCitations.net](https://opencitations.net/), where users can explore metadata on the citing articles if openly available. 
+
+For efficiency, the tool caches data for seven days, which might introduce some small variation relative to the current CrossRef numbers.
 
 ## Dependencies
 - CHI
