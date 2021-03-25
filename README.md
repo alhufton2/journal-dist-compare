@@ -8,7 +8,7 @@ The display defaults to visualizing the distributions in log10 space.
 
 The hypothesis that the distributions are distinct is evaluated using pairwise [Kolmogorov-Smirnov tests][https://en.wikipedia.org/wiki/Kolmogorov-Smirnov_test].
 
-##Dependencies
+## Dependencies
 - CHI
 - Encode
 - CGI::Simple
