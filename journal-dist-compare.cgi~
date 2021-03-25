@@ -714,6 +714,7 @@ sub print_intro {
   <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true">Random Example</a>!</p>
   
   <p><a href="https://github.com/alhufton2/journal-dist-compare">Source code and methods&nbsp;▸</a></p>
+
 </div>
 
 EOF
