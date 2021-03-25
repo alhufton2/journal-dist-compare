@@ -15,6 +15,7 @@ For each journal, the top ten most cited articles are listed for the selected pe
 For efficiency, the tool caches data for seven days, which might introduce some small variation relative to the current CrossRef numbers.
 
 ## Dependencies
+- Chart.js
 - CHI
 - Encode
 - CGI::Simple
