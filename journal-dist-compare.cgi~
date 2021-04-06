@@ -540,8 +540,15 @@ sub get_crossref_metadata {
 				my $metadata = decode_json $response->content;
 				if ( $first ) {
 					$first = 0;
-					if ( $metadata->{'message'}->{'total-results'} ) { $result_num = $metadata->{'message'}->{'total-results'}; }
-					if ( $result_num == 0 ) { print "<p>WARNING: No results for $issn in $year.</p>\n"; $cache->set($cache_id, "Failed (No results)", $timeout); exit; }
+					if ( $metadata->{'message'}->{'total-results'} ) { 
+					    $result_num = $metadata->{'message'}->{'total-results'}; 
+					    # Extend the cache marker if this will be a long run
+					    if ( $result_num > 1000 ) {
+					        $max_download_time = $timeout * ( $result_num / 1000 ) + 60;
+					        $cache->set($cache_id, 'Downloading', $max_download_time);
+					    }
+					}
+					if ( $result_num == 0 ) { print "WARNING: No results for $issn in $year.\n"; $cache->set($cache_id, "Failed (No results)", $timeout); exit; }
 				}
 				if ( $metadata->{'message'}->{'next-cursor'} ) { $next_cursor = $q->url_encode($metadata->{'message'}->{'next-cursor'}); }
 				if ( @{$metadata->{'message'}->{'items'}} ) {
@@ -661,7 +668,7 @@ sub print_fail_message {
 <p>Errors were encountered while trying to download some of the requested citation data. 
 'No results' may indicate that your journal of interest had no publications in the selected year, 
 or that the ISSN you used isn't the one the journal uses in its CrossRef metadata. 
-If a journal has more than one ISSN, 'print' version is usually the one recognized 
+If a journal has more than one ISSN, the 'print' version is usually the one recognized 
 by CrossRef. 500 errors may simply indicate a timeout problem due to a slow connection. 
 Hit 'Go' again to retry.</p>
 EOF
@@ -691,7 +698,10 @@ EOF
 }
     
 sub print_intro {
-    my @issn_rand = ('0098-7484', '2052-4463', '1548-7105', '1866-3516', '1537-1719', '2046-1402', '1095-9203', '2054-5703', '2190-4286', '1097-2765', '1759-4812', '0305-1048', '1944-8007', '1313-2970', '1053-8119', '1368-423X', '1662-453X');
+    my @issn_rand = ('0098-7484', '2052-4463', '1548-7105', '1866-3516', 
+        '1537-1719', '2046-1402', '1095-9203', '2054-5703', '2190-4286', 
+        '1097-2765', '1759-4812', '0305-1048', '1944-8007', '1313-2970', 
+        '1053-8119', '1368-4221', '1662-453X', '1687-0409', '1091-6490', '1744-4292');
     &shuffle(\@issn_rand);
     my $year_rand = 2015 + int rand(4);
     
@@ -702,9 +712,9 @@ sub print_intro {
   publically available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
   Enter the ISSN for each journal of interest. <a href="https://portal.issn.org/">Find journal ISSNs here.</a>
   All publications categorized as 'journal-article' by CrossRef are included. 
-  Please note that this is likely to include corrections and editorial content, 
-  not just peer-reviewed research articles. Citation counts are the total 
-  citations recorded for the entire lifetime of each publication.</p>
+  This may include corrections and editorial content, not just peer-reviewed 
+  research articles. All citations recorded for the entire lifetime of each 
+  publication are counted, regardless of the selected time interval.</p>
   
   <p>Please note that it could take up to several minutes for the results to be 
   generated, especially if you are comparing journals with thousands of 
