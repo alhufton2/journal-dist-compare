@@ -523,8 +523,13 @@ sub get_crossref_metadata {
 		
 		my $result_num = 0;
 		my $first = 1;
-		my $next_cursor = '*'; 
-		print "Attempting to obtain citation data from CrossRef for ISSN $issn in year $year.\n";
+		my $next_cursor = '*';
+		
+		my @t = localtime;
+		$t[5] += 1900;
+		$t[4]++;
+		my $iso_time = sprintf "%04d-%02d-%02d %02d:%02d:%02d", @t[5,4,3,2,1,0];
+		print "Attempting to obtain citation data from CrossRef for ISSN $issn in year $year ($iso_time).\n";
 	
 		while ( $result_num > 0 || $first ) {
 			my $rows; 
@@ -671,6 +676,7 @@ sub print_header {
 sub print_tail {
     print <<EOF;  
 <div class="footer">
+<img style="float:left;display:inline;" src="https://assets.crossref.org/logo/metadata-from-crossref-logo-200.svg" width="200" height="68" alt="Metadata from Crossref logo">
 <p><a href="https://alhufton.com/">Home</a> 
 | <a href="mailto:$contact_email">Contact</a> 
 | <a href="https://github.com/alhufton2/">GitHub</a></p>
@@ -714,7 +720,7 @@ sub print_intro {
   <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true">Random Example</a>!</p>
   
   <p><a href="https://github.com/alhufton2/journal-dist-compare">Source code and methods&nbsp;▸</a></p>
-
+  
 </div>
 
 EOF
