@@ -8,7 +8,7 @@ Citation distributions are displayed as either [empirical cumulative distributio
 
 The hypothesis that the distributions are distinct is evaluated using pairwise [Kolmogorov-Smirnov tests](https://en.wikipedia.org/wiki/Kolmogorov-Smirnov_test).
 
-For each journal, the top ten most cited articles are listed for the selected period, with links to [OpenCitations.net](https://opencitations.net/), where users can explore metadata on the citing articles if openly available. The OpenCitations links are currently deactivated on the public beta version.
+For each journal, the top ten most cited articles are listed for the selected period, with links to [OpenCitations.net](https://opencitations.net/), where users can explore metadata on the citing articles if openly available.
 
 For efficiency, the tool caches data for seven days, which might introduce some small variation relative to the current CrossRef numbers.
 
