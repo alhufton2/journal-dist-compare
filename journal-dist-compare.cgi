@@ -45,7 +45,7 @@ my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
-my $contact_email = 'contact@alhufton.com';
+my $contact_email = 'enter email address';
 my $timeout = 300;
 my $cache_time = '7 days';
 my $top_num = 10; 
