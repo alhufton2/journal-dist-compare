@@ -778,7 +778,7 @@ sub print_intro {
   <p>For efficiency, the tool caches data for seven days, which might introduce 
   some small variation relative to the current CrossRef numbers.</p>
   
-  <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true">Random Example</a>!</p>
+  <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true&stepped=true">Random Example</a>!</p>
   
   <p><a href="https://github.com/alhufton2/journal-dist-compare">Source code and methods&nbsp;▸</a></p>
   
