@@ -45,7 +45,7 @@ my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
-my $contact_email = 'enter email address';
+my $contact_email = 'contact@alhufton.com';
 my $timeout = 300;
 my $cache_time = '7 days';
 my $top_num = 10; 
@@ -57,8 +57,11 @@ my $alpha = 0.05;
 my @issn_clean;
 my $start_year;
 my $end_year;
-my $log;
+my $log = 0;
+my $ignore_zero_citers = 0;
+my $stepped = 0;
 my $chart;
+my $xmax = 'auto';
 
 # main data variables
 my %citation_counts; # ISSN->Stat Discrete obj
@@ -75,13 +78,15 @@ opendiv("row");
 	
 # Parse parameters, and create the content in the main righthand column
 opendiv("column-main");
-my $error = 0;
 if ( $q->param ) { 
 	if ( clean_parameters($q) ) {
 		make_results() if load_data();
-	} else { $error = 1; }
-} elsif ( $error == 0 ) {
-    $log = 1;
+	}
+} else {
+    # Define some defaults
+    $log = 1; 
+    $stepped = 1;
+    $chart = 'ecdf';
 	print_intro();
 }
 closediv();	# close main column
@@ -111,13 +116,19 @@ sub clean_parameters {
     # Checks
     unless ( @issn_clean ) { print "<p>No valid ISSNs provided.</p>"; return 0; }
     unless ( $form->param('interval') <= $max_interval ) { print "<p>Selected interval exceeds maximum allowed.</p>"; return 0; }
+    if ( @issn_clean > 6 ) { print "<p>Too many ISSNs provided.</p>"; return 0; }
     
     $start_year = $form->param('start_year');
     $end_year = $start_year + $form->param('interval') - 1;
-    if ( $form->param('log') ) { $log = 1 } 
-    else { $log = 0 }
-    $chart = 'ecdf';
-    if ( $form->param('chart') && $form->param('chart') eq 'pmf' ) { $chart = 'pmf' }
+    
+    if ( $form->param('log') ) { $log = 1 }   
+    if ( $form->param('stepped') ) { $stepped = 1 } 
+    if ( $form->param('zignore') ) { $ignore_zero_citers = 1 } 
+
+    if ( $form->param('chart') && $form->param('chart') eq 'hist' ) { $chart = 'hist' }
+    elsif ( $form->param('chart') && $form->param('chart') eq 'iecdf' ) { $chart = 'iecdf' }
+    else { $chart = 'ecdf' }
+    if ( $form->param('xmax') && $form->param('xmax') =~ /^[0-9]+$/ ) { $xmax = $form->param('xmax') }
 
     return 1; 
 }
@@ -164,33 +175,33 @@ sub load_data {
 			
 			my $min;
 			foreach my $item ( @results ) {
-				if ( $item->{'is-referenced-by-count'} ) {
-				   $citation_counts{$issn}->add_data($item->{'is-referenced-by-count'});
- 
-					### partial sorting algorithm ######
-					my $k = 0;
-					my $added = 0;
-					if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
-						foreach my $item2 ( @{$top_pubs{$issn}} ) {
-							last if ( $k > $top_num );
-							if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
-								splice @{$top_pubs{$issn}}, $k, 0, $item;
-								pop @{$top_pubs{$issn}} if ( @{$top_pubs{$issn}} > $top_num ); 
-								$min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
-								$added = 1;
-								last;
-							}
-							++$k;
-						}
-					}
-					if ( $added == 0 && @{$top_pubs{$issn}} < $top_num ) { 
-						push @{$top_pubs{$issn}}, $item;
-					}         
-					####################################          
-					
-				} else {
-					$citation_counts{$issn}->add_data(0);
-				}
+			    if ( !defined $item->{'is-referenced-by-count'} || $item->{'is-referenced-by-count'} == 0 ) {
+			        next if $ignore_zero_citers;
+			        $item->{'is-referenced-by-count'} = 0;
+			    }
+			    $citation_counts{$issn}->add_data($item->{'is-referenced-by-count'});
+
+                ### partial sorting algorithm ######
+                my $k = 0;
+                my $added = 0;
+                if ( ! defined $min || $item->{'is-referenced-by-count'} > $min ) {
+                    foreach my $item2 ( @{$top_pubs{$issn}} ) {
+                        last if ( $k > $top_num );
+                        if ( $item->{'is-referenced-by-count'} >= $item2->{'is-referenced-by-count'} ) {
+                            splice @{$top_pubs{$issn}}, $k, 0, $item;
+                            pop @{$top_pubs{$issn}} if ( @{$top_pubs{$issn}} > $top_num ); 
+                            $min = $item->{'is-referenced-by-count'} if ( $item->{'is-referenced-by-count'} < $min );
+                            $added = 1;
+                            last;
+                        }
+                        ++$k;
+                    }
+                }
+                if ( $added == 0 && @{$top_pubs{$issn}} < $top_num ) { 
+                    push @{$top_pubs{$issn}}, $item;
+                }         
+                ####################################          
+
 			}
 		} 
 		return 1;  
@@ -210,8 +221,9 @@ sub load_data {
 
 sub make_results {
     
-    my %ecdf; # hash of arrays. Always generated
-    my %pmf;  # hash of arrays. Only generated if chart = 'pmf'
+    my %ecdf;  # hash of arrays. Always generated
+    my %hist;  # hash of arrays. Only generated if chart = 'hist'
+    my %iecdf; # hash of arrays. Only generated if chart = 'iecdf'
     my %n;
     my @results_HTML;
     my $j_num = scalar @issn_clean;
@@ -219,24 +231,17 @@ sub make_results {
     # Place the distribution chart
     print "<div id=\"results\">\n";
     if ( $chart eq 'ecdf' ) {
-        my $pmf_link = $query_url;
-        if ( $pmf_link =~ /chart=ecdf/ ) {
-            $pmf_link =~ s/chart=ecdf/chart=pmf/;
-        } else {
-            $pmf_link .= "&chart=pmf";
-        }
-        print "<h2>Empirical cumulative distribution function (eCDF)</h2>\n";
-        print "<p>Each point represents the fraction of papers (<em>y</em>) that have <em>x</em> or fewer citations. 
-        You may also view the distribution as a <a href=\"$pmf_link\">Probability Mass Function (PMF)</a>, a 
-        non-cumulative histogram-like representation. Click on the journal names below to toggle their display.</p>\n";
-    } elsif ( $chart eq 'pmf' ) {
-        my $ecdf_link = $query_url;
-        $ecdf_link =~ s/chart=pmf/chart=ecdf/;
-        print "<h2>Probability mass function (PMF)</h2>\n"; 
-        print "<p>Each point represents the fraction of papers (<em>y</em>) that have exactly <em>x</em> citations.  
-        You may also view the distribution as an <a href=\"$ecdf_link\">Empirical Cumulative Distribution Function 
-        (eCDF)</a>, which generally offers more power to see genuine differences in the distributions. Click on the 
-        journal names below to toggle their display.</p>\n";
+        print "<h2>Empirical cumulative distribution function (eCDF)</h2>\n
+        <p>Each point represents the fraction of papers (<em>y</em>) that 
+        have <em>x</em> or fewer citations. Click on the journal names to toggle their display.</p>\n";
+    } elsif ( $chart eq 'iecdf' ) {
+        print "<h2>Inverse empirical cumulative distribution function (ieCDF)</h2>\n
+        <p>Each point represents the fraction of papers (<em>y</em>) that 
+        have <em>x</em> or more citations. Click on the journal names to toggle their display.</p>\n";
+    } elsif ( $chart eq 'hist' ) {
+        print "<h2>Normalized histogram</h2>\n
+        <p>Each point represents the fraction of papers (<em>y</em>) that 
+        have exactly <em>x</em> citations. Click on the journal names to toggle their display.</p>\n";
     } 
     print  "<canvas id=\"myChart\"></canvas>\n";
         
@@ -253,13 +258,35 @@ sub make_results {
         my @uniqs = $citation_counts{$issn}->uniq(); 
         my $f = $citation_counts{$issn}->frequency_distribution_ref(\@uniqs);
         my $i = 0;
+        my $max = 0;
+        
         foreach ( @uniqs ) {
-            $i += $f->{$_};
-            $ecdf{$issn}->[$_] = $i/$n{$issn};
-            if ( $chart eq 'pmf') {
-                $pmf{$issn}->[$_] = $f->{$_}/$n{$issn};
+            $i += $f->{$_}; 
+            $ecdf{$issn}->[$_] = $i/$n{$issn}; 
+            if ( $chart eq 'iecdf' ) {
+                $iecdf{$issn}->[$_] = 1 - $i/$n{$issn};
+            } elsif ( $chart eq 'hist') {
+                $hist{$issn}->[$_] = $f->{$_}/$n{$issn};
             }
-        } 
+            $max = $_;
+        }
+        
+        if ( $chart eq 'hist' ) {
+            # Fill in bins with zero publications
+            for (0 .. $max + 1) {
+                $hist{$issn}->[$_] = 0 unless $hist{$issn}->[$_];
+            }
+            # Make final bar
+            if ( $xmax ne 'auto' && $xmax < $max ) {
+                my $k = 0;
+                my $i = $xmax;
+                until ($k) { 
+                    $k = $ecdf{$issn}->[$i] if $ecdf{$issn}->[$i];
+                    --$i;
+                }
+                $hist{$issn}->[$xmax] += 1 - $k;
+            }
+        }
         
         $stattable->addRow(
             $top_pubs{$issn}->[0]->{'container-title'}->[0],
@@ -292,6 +319,8 @@ sub make_results {
         my $c_alpha = $alpha; 
         $c_alpha /= 3 if ($j_num == 3);
         $c_alpha /= 6 if ($j_num == 4);
+        $c_alpha /= 11 if ($j_num == 5);
+        $c_alpha /= 16 if ($j_num == 6);
         
         my $k = 1;
         my %inverseD;
@@ -360,8 +389,10 @@ sub make_results {
         print "</ol>\n";
     }
     
-    if ( $chart eq 'pmf' ) {
-        drawChart (\%pmf);
+    if ( $chart eq 'hist' ) {
+        drawChart (\%hist);
+    } elsif ( $chart eq 'iecdf' ) {
+        drawChart (\%iecdf);
     } else {
         drawChart (\%ecdf);
     }
@@ -372,27 +403,46 @@ sub make_results {
 # Writes a Chart.js javascript with cumulative distribution plots
 sub drawChart {
     my %ecdf = %{$_[0]}; 
-    my $x_scale;
-    my $log_label = '';
-
-    if ($log) { 
-        $x_scale = 'logarithmic';
-        $log_label = " (log10)";
-    } else { $x_scale = 'linear' }
+    my $x_scale = 'linear';
+    my $xmax_string;
+    my $stepped_string = '';
+    my $hist_callback = '';
     
-    my $yaxis_label = "Cumulative probability";
-    my $xaxis_label = "Citations to paper since publication$log_label";
-    if ( $chart eq 'pmf' ) {
-        $yaxis_label = "Probability";
-        $xaxis_label = "Citations to paper since publication$log_label";
+    $stepped_string = "steppedLine: 'before'," if $stepped;
+    if ( $xmax ne 'auto' ) {
+        my $temp_max = $xmax;
+        if ( $chart eq 'hist' ) {
+            ++$temp_max;
+            $hist_callback = "
+                callback: function(value, index, values) {
+                  if ( value === $xmax )
+                    return '>' + value;
+                  else if ( value > $xmax ) 
+                    return '';
+                  else 
+                    return value;
+                },";
+        }     
+        $xmax_string = "max: $temp_max," 
+    };
+    $x_scale = 'logarithmic' if ($log);
+    
+    my $yaxis_label = "Proportion with x or fewer citations";
+    my $xaxis_label = "Citations to paper since publication";
+    if ( $chart eq 'hist' ) {
+        $yaxis_label = "Proportion with exactly x citations";
+    } elsif ( $chart eq 'iecdf' ) {
+        $yaxis_label = "Proportion with x or more citations";
     }
     
     # Define the colors that will be used for the four data series
     my @bgcolors = (
         "rgba(153,255,51,0.6)",
         "rgba(0,51,204,0.6)",
-        "rgba(252, 174, 30,0.6)",
+        "rgba(252,174,30,0.6)",
         "rgba(190,0,220,0.6)",
+        "rgba(0,204,255,0.6)",
+        "rgba(255,255,0,0.6)",
         );
     
 ###### start the Chart.js script #
@@ -414,24 +464,17 @@ EOF
         
 ####### start a new data series
 
-    if ( $chart eq 'ecdf' ) {
-       print <<EOF;
+
+    print <<EOF;
         {
            label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
-           steppedLine: 'after',
+           $stepped_string
            showLine: 'true',
            backgroundColor: "$bgcolors[$k]",
+           borderColor: "$bgcolors[$k]",
            data: [
 EOF
-    } elsif ( $chart eq 'pmf' ) {
-        print <<EOF;
-        {
-           label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
-           showLine: 'true',
-           backgroundColor: "$bgcolors[$k]",
-           data: [
-EOF
-    }
+    
 ##############################
         ++$k;
             
@@ -459,10 +502,15 @@ EOF
                 fontSize: 16
             }
         },
+        elements: { point: { hitRadius: 20, radius: 0 } },
         scales: {
           xAxes: [{
              type: '$x_scale',
              position: 'bottom',
+             ticks: {
+                $xmax_string
+                $hist_callback
+             },
              scaleLabel: {
                 labelString: '$xaxis_label',
                 display: 'true',
@@ -470,7 +518,7 @@ EOF
              },
              gridLines: { 
                 color: 'rgb(50,50,50)'
-             },
+             }
           }],
           yAxes: [{
              type: 'linear',
@@ -680,7 +728,7 @@ EOF
 
 
 sub print_header {
-    print "<div class=\"header\"><h1><a href=\"$tool_url\">Compare journal citation distributions</a></h1></div>\n";
+    print "<div class=\"header\"><h1><a href=\"$tool_url\">Compare journal citation distributions <span style=\"color: red\"><em>beta</em></span></a></h1></div>\n";
 }
 
 sub print_tail {
@@ -745,9 +793,12 @@ sub print_prompt {
     my @issn_value;
     my $default_year = 2000;
     if ( $start_year ) { $default_year = $start_year;} 
-    my $log_checked = " checked=\"true\"" unless ( $log == 0 );
-    my $ecdf_checked = " checked=\"checked\"" unless ( $chart eq 'pmf' );
-    my $pmf_checked = " checked=\"checked\"" if ( $chart eq 'pmf' );
+    my $log_checked = " checked=\"true\"" if ( $log );
+    my $stepped_checked = " checked=\"true\"" if ( $stepped );
+    my $zignore_checked = " checked=\"true\"" if ( $ignore_zero_citers );
+    my $ecdf_checked = " selected=\"selected\"" if ( $chart eq 'ecdf' );
+    my $hist_checked = " selected=\"selected\"" if ( $chart eq 'hist' );
+    my $iecdf_checked = " selected=\"selected\"" if ( $chart eq 'iecdf' );
     
     foreach (0..3) {
         unless ( defined $issn_clean[$_] ) {
@@ -777,12 +828,19 @@ sub print_prompt {
   <p>start year&nbsp;<select id="year" name="start_year" required="true"></select></br>
   interval (yrs)&nbsp;<select id="interval" name="interval">$interval_opt</select></br>
   <h3>Display options</h3>
-  <p><input type="radio" id="option1" name="chart" value="ecdf"$ecdf_checked>
-  <label for="option1">eCDF</label>
-  <input type="radio" id="option2" name="chart" value="pmf"$pmf_checked>
-  <label for="option2">PMF</label><br>  
-  <input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
-  <label for="log">logarithmic&nbsp;</label></p>
+  <p>Chart&nbsp;<select id="chart" name="chart">
+  <option $ecdf_checked value="ecdf">eCDF</option>
+  <option $iecdf_checked value="iecdf">inverse eCDF</option>
+  <option $hist_checked value="hist">histogram</option>
+  </select><br>
+  <label for="xmax">x-axis max</label>
+  <input type="text" name="xmax" size="2" maxlength="50" value="$xmax"></p>
+  <p><input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
+  <label for="log">logarithmic&nbsp;</label><br>
+  <input style="display:inline" type="checkbox" id="zignore" name="zignore" value="true"$zignore_checked>
+  <label for="zignore">ignore zero citers&nbsp;</label><br>
+  <input style="display:inline" type="checkbox" id="stepped" name="stepped" value="true"$stepped_checked>
+  <label for="stepped">stepped line&nbsp;</label></p>
   
   <div class="button">
     <input type="submit" value="Go!" style="font-size : 20px;">

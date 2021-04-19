@@ -141,7 +141,7 @@ sub load_data {
     		} elsif ( defined $cache_results && length $cache_results ) {
     			$status_table->addRow($issn, $year, $cache_results);
     			$success = 0;
-    			unless ( $cache_results eq 'Downloading' ) { $fail = 1; }
+    			unless ( $cache_results =~ /^Downloading/ ) { $fail = 1; }
     		} else {
     			$status_table->addRow($issn, $year, 'Initiating download');
     			get_crossref_metadata($issn,$year,$uaheader); 
@@ -504,7 +504,7 @@ sub get_crossref_metadata {
     
     # Place a marker in the cache to let other runs know we are downloading citation metadata for this journal & year
     my $max_download_time = $timeout + 60;
-    $cache->set($cache_id, 'Downloading', $max_download_time);
+    $cache->set($cache_id, 'Downloading (0%)', $max_download_time);
     
     # Establish daemon settings to fork off download operations
     my $daemon = Proc::Daemon->new(
@@ -522,6 +522,7 @@ sub get_crossref_metadata {
 		$ua->agent($uaheader); 
 		
 		my $result_num = 0;
+		my $total_result_num = 0;
 		my $first = 1;
 		my $next_cursor = '*';
 		
@@ -542,11 +543,7 @@ sub get_crossref_metadata {
 					$first = 0;
 					if ( $metadata->{'message'}->{'total-results'} ) { 
 					    $result_num = $metadata->{'message'}->{'total-results'}; 
-					    # Extend the cache marker if this will be a long run
-					    if ( $result_num > 1000 ) {
-					        $max_download_time = $timeout * ( $result_num / 1000 ) + 60;
-					        $cache->set($cache_id, 'Downloading', $max_download_time);
-					    }
+					    $total_result_num = $result_num;
 					}
 					if ( $result_num == 0 ) { print "WARNING: No results for $issn in $year.\n"; $cache->set($cache_id, "Failed (No results)", $timeout); exit; }
 				}
@@ -563,6 +560,12 @@ sub get_crossref_metadata {
 				exit;
 			}
 			$result_num -= 1000;
+			
+		    # Extend the cache marker if this will be a long run
+		    if ( $result_num > 0) {
+		        my $complete_percent = sprintf "%d", ( (1 - $result_num / $total_result_num) * 100);
+		        $cache->set($cache_id, "Downloading ($complete_percent\%)", $max_download_time);
+			}
 		}
 		if ( @results ) {
 			$cache->set($cache_id, \@results, $cache_time);
