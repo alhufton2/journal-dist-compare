@@ -240,8 +240,9 @@ sub make_results {
         have <em>x</em> or more citations. Click on the journal names to toggle their display.</p>\n";
     } elsif ( $chart eq 'hist' ) {
         print "<h2>Normalized histogram</h2>\n
-        <p>Each point represents the fraction of papers (<em>y</em>) that 
-        have exactly <em>x</em> citations. Click on the journal names to toggle their display.</p>\n";
+        <p>Each bar represents the fraction of papers (<em>y</em>) that 
+        have exactly <em>x</em> citations. If a value was selected for 'x-axis max', the last bar 
+        shows the proportion of papers with <em>x</em> or greater citations. Click on the journal names to toggle their display.</p>\n";
     } 
     print  "<canvas id=\"myChart\"></canvas>\n";
         
@@ -285,6 +286,10 @@ sub make_results {
                     --$i;
                 }
                 $hist{$issn}->[$xmax] += 1 - $k;
+                for (0 .. $max + 1) {
+                    $hist{$issn}->[$_] = undef if ( $_ > $xmax + 1 );
+                    $hist{$issn}->[$_] = 0 if ( $_ == $xmax + 1 ); 
+                }
             }
         }
         
@@ -408,12 +413,13 @@ sub drawChart {
     my $stepped_string = '';
     my $hist_callback = '';
     
-    $stepped_string = "steppedLine: 'before'," if $stepped;
+    $stepped_string = "stepped: 'before'," if $stepped;
     if ( $xmax ne 'auto' ) {
         my $temp_max = $xmax;
         if ( $chart eq 'hist' ) {
-            ++$temp_max;
+            $temp_max += int($xmax * 0.03) + 1;
             $hist_callback = "
+            ticks: {
                 callback: function(value, index, values) {
                   if ( value === $xmax )
                     return '>' + value;
@@ -421,7 +427,8 @@ sub drawChart {
                     return '';
                   else 
                     return value;
-                },";
+                }
+            },";
         }     
         $xmax_string = "max: $temp_max," 
     };
@@ -448,7 +455,7 @@ sub drawChart {
 ###### start the Chart.js script #
     print <<EOF;
 <script>
-Chart.defaults.global.defaultFontColor = "rgb(190,190,190)";
+Chart.defaults.color = "rgb(190,190,190)";
 var ctx = document.getElementById('myChart').getContext('2d');
 var myChart = new Chart(ctx, {
   type: 'scatter',
@@ -468,7 +475,6 @@ EOF
     print <<EOF;
         {
            label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
-           $stepped_string
            showLine: 'true',
            backgroundColor: "$bgcolors[$k]",
            borderColor: "$bgcolors[$k]",
@@ -496,43 +502,47 @@ EOF
 ######## Style the axes and add axis labels      
     print <<EOF;
       options: {
-        legend: {
-            display: true,
-            labels: {
-                fontSize: 16
+        locale: 'en-US',
+        plugins: {
+            tooltip: {
+                mode: 'nearest'
+            }, 
+            legend: {
+                display: true,
+                labels: {
+                    font: { size: 16 }
+                }
             }
         },
-        elements: { point: { hitRadius: 20, radius: 0 } },
+        elements: { point: { hitRadius: 10, radius: 0 }, line: { $stepped_string fill: 'origin', tension: 0.4 } },
         scales: {
-          xAxes: [{
+          x: {
              type: '$x_scale',
              position: 'bottom',
-             ticks: {
-                $xmax_string
-                $hist_callback
-             },
-             scaleLabel: {
-                labelString: '$xaxis_label',
+             $xmax_string
+             $hist_callback
+             title: {
+                text: '$xaxis_label',
                 display: 'true',
-                fontSize: 16
+                font: { size: 16 }
              },
-             gridLines: { 
+             grid: { 
                 color: 'rgb(50,50,50)'
              }
-          }],
-          yAxes: [{
+          },
+          y: {
              type: 'linear',
              position: 'left',
-             scaleLabel: {
-                labelString: '$yaxis_label',
+             suggestedMin: 0, 
+             title: {
+                text: '$yaxis_label',
                 display: 'true',
-                fontSize: 16
+                font: { size: 16 }
              },
-             ticks: { suggestedMin: 0 },
-             gridLines: { 
+             grid: { 
                 color: 'rgb(50,50,50)'
-             },
-          }]
+             }
+          }
         }
     }
 });
@@ -681,7 +691,7 @@ sub start_html {
 <title>Compare Journal Citation Distributions</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.9.4/Chart.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.1.1/chart.min.js"></script>
 <link rel="stylesheet" href="../css/tool.css">
 </head>
 <body onLoad="timeRefresh(10000);">
@@ -828,19 +838,35 @@ sub print_prompt {
   <p>start year&nbsp;<select id="year" name="start_year" required="true"></select></br>
   interval (yrs)&nbsp;<select id="interval" name="interval">$interval_opt</select></br>
   <h3>Display options</h3>
-  <p>Chart&nbsp;<select id="chart" name="chart">
+  <div class="tooltip">Chart
+  <span class="tooltiptext tooltip-left">
+     Select the chart type: empirical cumulative distribution function (eCDF), inverse eCDF, or histogram
+  </span></div>&nbsp;
+  <select id="chart" name="chart">
   <option $ecdf_checked value="ecdf">eCDF</option>
   <option $iecdf_checked value="iecdf">inverse eCDF</option>
   <option $hist_checked value="hist">histogram</option>
   </select><br>
-  <label for="xmax">x-axis max</label>
+  <div class="tooltip"><label for="xmax">x-axis max</label>
+  <span class="tooltiptext tooltip-left">
+     Enter a positive integer to set a cutoff for the x-axis. If no number is entered, the range will be automatically set to show the full distributions.
+  </span></div>
   <input type="text" name="xmax" size="2" maxlength="50" value="$xmax"></p>
-  <p><input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
-  <label for="log">logarithmic&nbsp;</label><br>
-  <input style="display:inline" type="checkbox" id="zignore" name="zignore" value="true"$zignore_checked>
-  <label for="zignore">ignore zero citers&nbsp;</label><br>
-  <input style="display:inline" type="checkbox" id="stepped" name="stepped" value="true"$stepped_checked>
-  <label for="stepped">stepped line&nbsp;</label></p>
+  <p><div class="tooltip"><input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
+  <label for="log">logarithmic</label>
+  <span class="tooltiptext tooltip-left">
+     Plot the x-axis in log10 space. 
+  </span></div><br>
+  <div class="tooltip"><input style="display:inline" type="checkbox" id="zignore" name="zignore" value="true"$zignore_checked>
+  <label for="zignore">ignore zero citers&nbsp;</label>
+  <span class="tooltiptext tooltip-left">
+     Remove all publications with zero citations from the dataset.
+  </span></div><br>
+  <div class="tooltip"><input style="display:inline" type="checkbox" id="stepped" name="stepped" value="true"$stepped_checked>
+  <label for="stepped">stepped line&nbsp;</label>
+  <span class="tooltiptext tooltip-left">
+     If selected, a stepped line (eCDF & inverse eCDF) or squared bars (histogram) are shown. If unselected, a curve is drawn through the points.
+  </span></div></p>
   
   <div class="button">
     <input type="submit" value="Go!" style="font-size : 20px;">
