@@ -175,6 +175,7 @@ sub load_data {
 			
 			my $min;
 			foreach my $item ( @results ) {
+			    # to add here: print the item to the log file, using the JSON pretty writer
 			    if ( !defined $item->{'is-referenced-by-count'} || $item->{'is-referenced-by-count'} == 0 ) {
 			        next if $ignore_zero_citers;
 			        $item->{'is-referenced-by-count'} = 0;
@@ -394,6 +395,8 @@ sub make_results {
         print "</ol>\n";
     }
     
+    # @issn_clean = sort { $citation_counts{$a}->median() <=> $citation_counts{$b}->median() } @issn_clean;
+    
     if ( $chart eq 'hist' ) {
         drawChart (\%hist);
     } elsif ( $chart eq 'iecdf' ) {
@@ -409,15 +412,30 @@ sub make_results {
 sub drawChart {
     my %ecdf = %{$_[0]}; 
     my $x_scale = 'linear';
-    my $xmax_string;
+    my $xmax_string = '';
     my $stepped_string = '';
-    my $hist_callback = '';
+    my $hist_callback = "
+            ticks: {
+                callback: function(value, index, values) {
+                  if ( value === 0.9 ) 
+                    return '';
+                  else
+                    return value
+                }
+            },";
+    my $x_min = 0;
     
+    $x_min = 0.9 if $log;
     $stepped_string = "stepped: 'before'," if $stepped;
+    $x_scale = 'logarithmic' if $log;
+
     if ( $xmax ne 'auto' ) {
         my $temp_max = $xmax;
+        # For histograms with a cutoff we need to make some changes to accomodate the final bar
         if ( $chart eq 'hist' ) {
-            $temp_max += int($xmax * 0.03) + 1;
+            # create some extra space
+            $temp_max += int($xmax * 0.03) + 1; 
+            # add a '>' sign to the tick label under the last bar, and mask the rest of the tick labels
             $hist_callback = "
             ticks: {
                 callback: function(value, index, values) {
@@ -425,31 +443,41 @@ sub drawChart {
                     return '>' + value;
                   else if ( value > $xmax ) 
                     return '';
+                  else if ( value === 0.9 ) 
+                    return '';
                   else 
                     return value;
                 }
             },";
         }     
-        $xmax_string = "max: $temp_max," 
-    };
-    $x_scale = 'logarithmic' if ($log);
+        $xmax_string = "max: $temp_max,"; 
+    }
     
-    my $yaxis_label = "Proportion with x or fewer citations";
+    # Axis labels
     my $xaxis_label = "Citations to paper since publication";
+    my $yaxis_label = "Proportion with x or fewer citations";
     if ( $chart eq 'hist' ) {
         $yaxis_label = "Proportion with exactly x citations";
     } elsif ( $chart eq 'iecdf' ) {
         $yaxis_label = "Proportion with x or more citations";
     }
     
-    # Define the colors that will be used for the four data series
+    # Define the colors that will be used for the data 
     my @bgcolors = (
-        "rgba(153,255,51,0.6)",
-        "rgba(0,51,204,0.6)",
-        "rgba(252,174,30,0.6)",
-        "rgba(190,0,220,0.6)",
-        "rgba(0,204,255,0.6)",
-        "rgba(255,255,0,0.6)",
+        "rgba(153,255,51,0.5)",
+        "rgba(0,51,204,0.5)",
+        "rgba(252,174,30,0.5)",
+        "rgba(190,0,220,0.5)",
+        "rgba(0,204,255,0.5)",
+        "rgba(255,255,0,0.5)",
+        );
+    my @bordercolors = (
+        "rgba(153,255,51,0.9)",
+        "rgba(0,51,204,0.9)",
+        "rgba(252,174,30,0.9)",
+        "rgba(190,0,220,0.9)",
+        "rgba(0,204,255,0.9)",
+        "rgba(255,255,0,0.9)",
         );
     
 ###### start the Chart.js script #
@@ -470,17 +498,14 @@ EOF
         print "," if $k;
         
 ####### start a new data series
-
-
-    print <<EOF;
+        print <<EOF;
         {
            label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
            showLine: 'true',
            backgroundColor: "$bgcolors[$k]",
-           borderColor: "$bgcolors[$k]",
+           borderColor: "$bordercolors[$k]",
            data: [
 EOF
-    
 ##############################
         ++$k;
             
@@ -503,6 +528,8 @@ EOF
     print <<EOF;
       options: {
         locale: 'en-US',
+        aspectRatio: 1.7,
+        layout: { padding: 10 },
         plugins: {
             tooltip: {
                 mode: 'nearest'
@@ -512,7 +539,8 @@ EOF
                 labels: {
                     font: { size: 16 }
                 }
-            }
+            },
+            filler: { drawTime: 'beforeDatasetsDraw' }
         },
         elements: { point: { hitRadius: 10, radius: 0 }, line: { $stepped_string fill: 'origin', tension: 0.4 } },
         scales: {
@@ -521,6 +549,7 @@ EOF
              position: 'bottom',
              $xmax_string
              $hist_callback
+             min: $x_min, 
              title: {
                 text: '$xaxis_label',
                 display: 'true',
