@@ -45,6 +45,7 @@ my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
+my $max_journals = 4;
 my $contact_email = 'enter email address';
 my $timeout = 300;
 my $cache_time = '7 days';
@@ -52,9 +53,15 @@ my $top_num = 10;
 my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
 my $uaheader = "Journal Distribution Compare Tool/beta (https://alhufton.com; mailto:$contact_email)";
 my $alpha = 0.05; 
+my $write_to_file = 1;
+
+if ( $write_to_file ) {
+    open( LOG, ">$tempdir_path/log.txt" );
+}
 
 # main parameter variables
 my @issn_clean;
+my @issn_unclean; # may include journal names
 my $start_year;
 my $end_year;
 my $log = 0;
@@ -106,20 +113,18 @@ sub clean_parameters {
     # Process and clean the ISSNs 
     if ( $form->param('ISSN') ) {
         foreach ( $form->param('ISSN') ) {
-            s/\(.*?\)//g; 
-            s/\s+//g; 
-            my $issn_object = Business::ISSN->new($_);
+            my $issn = $_;
+            $issn =~ s/\(.*?\)//g; 
+            $issn =~ s/\s+//g; 
+            my $issn_object = Business::ISSN->new($issn);
             if ( $issn_object && $issn_object->is_valid() ) { 
                 push @issn_clean, $issn_object->as_string;
+                push @issn_unclean, $_;
             } else { print "<p>WARNING: ISSN ($_) is invalid</p>"; }
         }
     }
-   
-    # Checks
-    unless ( @issn_clean || $form->param('query') ) { print "<p>No valid ISSNs provided.</p>"; return 0; }
-    unless ( $form->param('interval') <= $max_interval ) { print "<p>Selected interval exceeds maximum allowed.</p>"; return 0; }
-    if ( @issn_clean > 4 ) { print "<p>Too many ISSNs provided.</p>"; return 0; }
     
+    # Process the parameters
     $start_year = $form->param('start_year');
     $end_year = $start_year + $form->param('interval') - 1;
     
@@ -130,17 +135,37 @@ sub clean_parameters {
     if ( $form->param('chart') && $form->param('chart') eq 'hist' ) { $chart = 'hist' }
     elsif ( $form->param('chart') && $form->param('chart') eq 'iecdf' ) { $chart = 'iecdf' }
     else { $chart = 'ecdf' }
+    
     if ( $form->param('xmax') && $form->param('xmax') =~ /^[0-9]+$/ ) { $xmax = $form->param('xmax') }
     
     if ( $form->param('query') && $form->param('query') =~ /[a-zA-Z]+/ ) {
         get_ISSN_with_query( $form->param('query') ); return 0;
     }
     
+    # Check for things that might prevent a full analysis run
+    unless ( @issn_clean || $form->param('query') ) { print "<p>No valid ISSNs provided.</p>"; return 0; }
+    unless ( $form->param('interval') <= $max_interval ) { print "<p>Selected interval exceeds maximum allowed.</p>"; return 0; }
+    if ( @issn_clean > $max_journals ) { remove_journal(); return 0; }
+    
     if ( $form->param('norun') ) { 
-        print "<h2>Search for more journals, or hit the 'Go' button in the bottom right if you are ready to run the analysis &rarr;</h2>\n"; return 0;
+        print "<h2>Search for more journals, or hit the 'Go' button in the bottom right if you are ready to run the analysis &rarr;</h2>\n"; 
+        return 0;
     }
 
     return 1; 
+}
+
+sub remove_journal {
+    print "<h2>Too many journals selected. Please remove one.</h2>\n";
+    foreach ( @issn_unclean ) {
+        my $remove_url = $query_url;
+        my $remove = $q->url_encode($_);
+        $remove =~ s/\(/%28/g;
+        $remove =~ s/\)/%29/g;
+        $remove_url =~ s/&?ISSN=\Q$remove//;
+        unless ( $remove_url =~ /&?norun=true/ ) { $remove_url .= "&norun=true"; }
+        print "<p><a href=\"$remove_url\"><strong>Remove: </strong> $_</a></p>\n";
+    }
 }
 
 sub get_ISSN_with_query {
@@ -157,7 +182,7 @@ sub get_ISSN_with_query {
     $query =~ s/^\s+|\s+$//g;
     $query = $q->url_encode($query);
 
-    my $response = $ua->get("https://api.crossref.org/journals?query=$query&rows=1000");
+    my $response = $ua->get("https://api.crossref.org/journals?query=$query&rows=400");
     if ($response->is_success) {
         my $metadata = decode_json $response->content;
         if ( @{$metadata->{'message'}->{'items'}} ) {
@@ -166,15 +191,22 @@ sub get_ISSN_with_query {
                 $issns{$item->{'title'}} = $item->{'ISSN'}->[0];
             }
         }
-    } else { print "<p>Crossref search failed with message $response->status_line</p>"; return 0; }
-    @titles = sort { length $a <=> length $b } @titles;
-    print "<h2>Journals found based on query: $query</h2>";
+    } else { print "<p>Crossref search failed with message " . $response->status_line. "</p>"; return 0; }
     
-    my $insert = $q->url_encode( "$issns{$titles[$_]} ($titles[$_])" );
-    for (0 .. 5) {
-        if ( defined $titles[$_] && defined $issns{$titles[$_]} ) {
-            print "<p><a href=\"$add_url&ISSN=$insert&norun=true\"><strong>Add</strong>: $titles[$_] ($issns{$titles[$_]})</a></p>";
+    if ( @titles ) {
+        @titles = sort { length $a <=> length $b } @titles;
+        print "<h2>Journals found based on query: $query</h2>";
+        
+        for (0 .. 5) {
+            if ( defined $titles[$_] && defined $issns{$titles[$_]} ) {
+                my $insert = $q->url_encode( "$issns{$titles[$_]} ($titles[$_])" );
+                print "<p><a href=\"$add_url&ISSN=$insert&norun=true\"><strong>Add</strong>: $issns{$titles[$_]} ($titles[$_])</a></p>";
+            }
         }
+
+    } else {
+        print "<h2>No matching journals found with query: $query</h2>";
+        return 0;
     }
     return 1;
 }
@@ -227,6 +259,10 @@ sub load_data {
 			        $item->{'is-referenced-by-count'} = 0;
 			    }
 			    $citation_counts{$issn}->add_data($item->{'is-referenced-by-count'});
+			    
+			    if ( $write_to_file ) {
+			        print LOG "$issn\t$item->{'container-title'}->[0]\t$item->{'DOI'}\t$item->{'is-referenced-by-count'}\n";
+			    }
 
                 ### partial sorting algorithm ######
                 my $k = 0;
@@ -721,7 +757,7 @@ sub KS_test_discrete {
         my $tempD = abs( $f1 - $f2 );
         $D = $tempD if ( $tempD > $D );
     }
-    #print "Comparing D $D to Dcrit $Dcrit, where n is $n1 and m $n2, at alpha $alpha.\n";
+    
     if ( $D > $Dcrit ) {
         return $D, 1;
     } else {
@@ -730,7 +766,7 @@ sub KS_test_discrete {
 }
 
 sub shuffle {
-    my $deck = shift;  # $deck is a reference to an array
+    my $deck = shift;     # $deck is a reference to an array
     return unless @$deck; # must not be empty!
 
     my $i = 3;
@@ -754,7 +790,7 @@ sub start_html {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.1.1/chart.min.js"></script>
-<link rel="stylesheet" href="../css/tool.css?asda">
+<link rel="stylesheet" href="../css/tool.css">
 </head>
 <body onLoad="timeRefresh(5000);">
     
@@ -831,25 +867,22 @@ sub print_intro {
     print <<EOF;
     
 <div class="intro">
-  <p>Compare the citation distributions for up to four selected journals using 
-  publically available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
-  All publications categorized as 'journal-article' by CrossRef are included. 
-  This may include corrections and editorial content, not just peer-reviewed 
-  research articles. The time interval controls which papers are considered, 
-  but does not control when the citations occurred. For example, if you select 
+  <p>Compare the citation distributions of up to four journals using 
+  open citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>.</p>
+  
+  <p>The time interval controls which publications are considered 
+  from the selected journals, but does not restrict when the citations occurred. For example, if you select 
   2015 and a two-year interval, then papers published in 2015 and 2016 are 
-  included. Any citations that occurred after publication will be counted (i.e. from 2015 to present).</p>
+  included, but all citations from any time after publication will be counted 
+  (i.e. the citing works could be published anytime from 2015 to present).</p>
   
   <p>Please note that it could take up to several minutes for the results to be 
   generated, especially if you are comparing journals with thousands of 
   publications per year.</p> 
   
-  <p>The hypothesis that the distributions are distinct is evaluated using pairwise 
+  <p>The hypotheses that the distributions are distinct are evaluated using pairwise 
   <a href="https://en.wikipedia.org/wiki/Kolmogorov-Smirnov_test">Kolmogorov-Smirnov 
   tests</a>.</p> 
-  
-  <p>For efficiency, the tool caches data for seven days, which might introduce 
-  some small variation relative to the current CrossRef numbers.</p>
   
   <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true&stepped=true">Random Example</a>!</p>
   
@@ -875,8 +908,8 @@ sub print_prompt {
     
     for ( 0..3 ) { $issn_value[$_] = '' }
     my $i = 0;
-    if ( $q->param('ISSN') ) { 
-        foreach ( $q->param('ISSN') ) {
+    if ( @issn_unclean ) { 
+        foreach ( @issn_unclean ) {
             if ( defined $top_pubs{$_}->[0]->{'container-title'}->[0] ) {                
                 $issn_value[$i] = "$_ ($top_pubs{$_}->[0]->{'container-title'}->[0])";
             } else {
@@ -896,50 +929,54 @@ sub print_prompt {
     # print the form    
     print <<EOF;
 <form>
-  <h3>Search for journals</h3>
-  <p>Enter the full title</p>
+  <h3>Find journals&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
+  Enter the full journal title, not an abbreviation
+  </span></span></h3>
   <input type="text" name="query" size="15" maxlength="50"><input type="submit" value="Search"></p>
 
-  <h3>Selected journals</h3>
+  <h3>Selected journals&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
+     The journal ISSNs listed below will be included in the analysis. Delete an ISSN and hit 'Go' again to remove it.
+  </span></span></h3>
   <p>Enter <a href="https://portal.issn.org/">ISSNs</a> directly or select via the journal search box above</p>
   <p><input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[0]">
     <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[1]">
     <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[2]">
     <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[3]"></p>
 
-  <h3>Publication years</h3>
+  <h3>Publication years&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
+     Select which years' content you want to analyze from the selected journals. 
+  </span></span></h3>
   <p>start year&nbsp;<select id="year" name="start_year" required="true"></select></br>
-  interval (yrs)&nbsp;<select id="interval" name="interval">$interval_opt</select></br>
+  interval (yrs)&nbsp;<select id="interval" name="interval">$interval_opt</select></br></p>
   <h3>Display options</h3>
-  <div class="tooltip">Chart
-  <span class="tooltiptext tooltip-left">
-     Select the chart type: empirical cumulative distribution function (eCDF), inverse eCDF, or histogram
-  </span></div>&nbsp;
+  <p><label for="chart">Chart&nbsp;</label>
   <select id="chart" name="chart">
   <option $ecdf_checked value="ecdf">eCDF</option>
   <option $iecdf_checked value="iecdf">inverse eCDF</option>
   <option $hist_checked value="hist">histogram</option>
-  </select><br>
-  <div class="tooltip"><label for="xmax">x-axis max</label>
-  <span class="tooltiptext tooltip-left">
+  </select>
+  <span class="tooltip">?<span class="tooltiptext tooltip-left">
+     Select the chart type: empirical cumulative distribution function (eCDF), inverse eCDF, or a normalized histogram
+  </span></span>
+  <label for="xmax">x-axis&nbsp;</label><input type="text" name="xmax" size="1" maxlength="50" value="$xmax">
+  <span class="tooltip">?<span class="tooltiptext tooltip-left">
      Enter a positive integer to set a cutoff for the x-axis. If no number is entered, the range will be automatically set to show the full distributions.
-  </span></div>
-  <input type="text" name="xmax" size="2" maxlength="50" value="$xmax"></p>
-  <p><div class="tooltip"><input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
+  </span></span></p>
+  <p><input style="display:inline" type="checkbox" id="log" name="log" value="true"$log_checked>
   <label for="log">logarithmic</label>
-  <span class="tooltiptext tooltip-left">
-     Plot the x-axis in log10 space. 
-  </span></div><br>
-  <div class="tooltip"><input style="display:inline" type="checkbox" id="zignore" name="zignore" value="true"$zignore_checked>
-  <label for="zignore">ignore zero citers&nbsp;</label>
-  <span class="tooltiptext tooltip-left">
+  <span class="tooltip">?<span class="tooltiptext tooltip-left">
+     Plot the axis in log10 space. 
+  </span></span><br>
+  <input style="display:inline" type="checkbox" id="zignore" name="zignore" value="true"$zignore_checked>
+  <label for="zignore">ignore no-citers</label>
+  <span class="tooltip">?<span class="tooltiptext tooltip-left">  
      Remove all publications with zero citations from the dataset.
-  </span></div><br>
-  <div class="tooltip"><input style="display:inline" type="checkbox" id="stepped" name="stepped" value="true"$stepped_checked>
+  </span></span><br>
+  <input style="display:inline" type="checkbox" id="stepped" name="stepped" value="true"$stepped_checked>
   <label for="stepped">stepped line&nbsp;</label>
-  <span class="tooltiptext tooltip-left">
+  <span class="tooltip">?<span class="tooltiptext tooltip-left">  
      If selected, a stepped line (eCDF & inverse eCDF) or squared bars (histogram) are shown. If unselected, a curve is drawn through the points.
-  </span></div></p>
+  </span></span></p>
   
   <div class="button">
     <input type="submit" value="Go!" style="font-size : 20px;">
