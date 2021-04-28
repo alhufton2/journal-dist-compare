@@ -76,7 +76,7 @@ print_menu();
 # Open the central portion of the page, which will consist of two columns
 opendiv("row");
 	
-# Parse parameters, and create the content in the main righthand column
+# Parse parameters, and create the content in the main lefthand column
 opendiv("column-main");
 if ( $q->param ) { 
 	if ( clean_parameters($q) ) {
@@ -91,7 +91,7 @@ if ( $q->param ) {
 }
 closediv();	# close main column
 
-# Create lefthand entry form
+# Create righthand entry form
 opendiv("column-side");
 print_prompt();
 closediv(); # close column side
@@ -106,17 +106,19 @@ sub clean_parameters {
     # Process and clean the ISSNs 
     if ( $form->param('ISSN') ) {
         foreach ( $form->param('ISSN') ) {
+            s/\(.*?\)//g; 
             s/\s+//g; 
             my $issn_object = Business::ISSN->new($_);
-            if ( $issn_object && $issn_object->is_valid() ) { push @issn_clean, $issn_object->as_string; }
-            else { print "<p>WARNING: ISSN ($_) is invalid</p>"; }
+            if ( $issn_object && $issn_object->is_valid() ) { 
+                push @issn_clean, $issn_object->as_string;
+            } else { print "<p>WARNING: ISSN ($_) is invalid</p>"; }
         }
     }
-    
+   
     # Checks
-    unless ( @issn_clean ) { print "<p>No valid ISSNs provided.</p>"; return 0; }
+    unless ( @issn_clean || $form->param('query') ) { print "<p>No valid ISSNs provided.</p>"; return 0; }
     unless ( $form->param('interval') <= $max_interval ) { print "<p>Selected interval exceeds maximum allowed.</p>"; return 0; }
-    if ( @issn_clean > 6 ) { print "<p>Too many ISSNs provided.</p>"; return 0; }
+    if ( @issn_clean > 4 ) { print "<p>Too many ISSNs provided.</p>"; return 0; }
     
     $start_year = $form->param('start_year');
     $end_year = $start_year + $form->param('interval') - 1;
@@ -129,8 +131,52 @@ sub clean_parameters {
     elsif ( $form->param('chart') && $form->param('chart') eq 'iecdf' ) { $chart = 'iecdf' }
     else { $chart = 'ecdf' }
     if ( $form->param('xmax') && $form->param('xmax') =~ /^[0-9]+$/ ) { $xmax = $form->param('xmax') }
+    
+    if ( $form->param('query') && $form->param('query') =~ /[a-zA-Z]+/ ) {
+        get_ISSN_with_query( $form->param('query') ); return 0;
+    }
+    
+    if ( $form->param('norun') ) { 
+        print "<h2>Search for more journals, or hit the 'Go' button in the bottom right if you are ready to run the analysis &rarr;</h2>\n"; return 0;
+    }
 
     return 1; 
+}
+
+sub get_ISSN_with_query {
+    my $query = shift;
+    my @titles;
+    my %issns;
+    
+    my $ua = LWP::UserAgent->new;
+    $ua->timeout(20);
+    $ua->agent($uaheader);
+    
+    my $add_url = $query_url;
+    $add_url =~ s/query=.*?(&|$)//;
+    $query =~ s/^\s+|\s+$//g;
+    $query = $q->url_encode($query);
+
+    my $response = $ua->get("https://api.crossref.org/journals?query=$query&rows=1000");
+    if ($response->is_success) {
+        my $metadata = decode_json $response->content;
+        if ( @{$metadata->{'message'}->{'items'}} ) {
+            foreach my $item ( @{$metadata->{'message'}->{'items'}} ) {
+                push @titles, $item->{title};
+                $issns{$item->{'title'}} = $item->{'ISSN'}->[0];
+            }
+        }
+    } else { print "<p>Crossref search failed with message $response->status_line</p>"; return 0; }
+    @titles = sort { length $a <=> length $b } @titles;
+    print "<h2>Journals found based on query: $query</h2>";
+    
+    my $insert = $q->url_encode( "$issns{$titles[$_]} ($titles[$_])" );
+    for (0 .. 5) {
+        if ( defined $titles[$_] && defined $issns{$titles[$_]} ) {
+            print "<p><a href=\"$add_url&ISSN=$insert&norun=true\"><strong>Add</strong>: $titles[$_] ($issns{$titles[$_]})</a></p>";
+        }
+    }
+    return 1;
 }
 
 # Load data from the cache into the main variables
@@ -204,7 +250,7 @@ sub load_data {
                 ####################################          
 
 			}
-		} 
+        }
 		return 1;  
 	} else {
     	if ($fail) {
@@ -245,7 +291,7 @@ sub make_results {
         have exactly <em>x</em> citations. If a value was selected for 'x-axis max', the last bar 
         shows the proportion of papers with <em>x</em> or greater citations. Click on the journal names to toggle their display.</p>\n";
     } 
-    print  "<canvas id=\"myChart\"></canvas>\n";
+    print  "<canvas id=\"myChart\" aria-label=\"A chart showing the citation distributions of the selected journals\" role=\"img\"></canvas>\n";
         
     # output some basic summary stats
     print "<h2>Summary statistics</h2>\n";
@@ -408,30 +454,32 @@ sub make_results {
 }
 
 
-# Writes a Chart.js javascript with cumulative distribution plots
+# Writes a Chart.js javascript chart
 sub drawChart {
     my %ecdf = %{$_[0]}; 
-    my $x_scale = 'linear';
-    my $xmax_string = '';
-    my $stepped_string = '';
-    my $hist_callback = "
-            ticks: {
-                callback: function(value, index, values) {
-                  if ( value === 0.9 ) 
-                    return '';
-                  else
-                    return value
-                }
-            },";
-    my $x_min = 0;
     
-    $x_min = 0.9 if $log;
-    $stepped_string = "stepped: 'before'," if $stepped;
+    # Set various formatting variables
+    my $x_scale = 'linear';
     $x_scale = 'logarithmic' if $log;
-
+    
+    my $stepped_string = '';
+    $stepped_string = "stepped: 'before'," if $stepped;
+    
+    my $x_min = 0;
+    my $hist_callback = '';
+    
+    # If log is selected do some formatting to accommodate zero values (basically creating a symlog axis)
+    if ( $log ) {
+        $x_min = 0.9;
+        # Mask out the = 0.9 label on the x-axis when log is selected. 
+        $hist_callback = "ticks: { callback: function(value, index, values) { if ( value === $x_min ) return ''; else return value } },";
+    }
+    
+    # If there is a xmax cutoff, we need to do some special formatting        
+    my $xmax_string = '';
     if ( $xmax ne 'auto' ) {
         my $temp_max = $xmax;
-        # For histograms with a cutoff we need to make some changes to accomodate the final bar
+        # For histograms with a cutoff we need to make some changes to accommodate the final bar
         if ( $chart eq 'hist' ) {
             # create some extra space
             $temp_max += int($xmax * 0.03) + 1; 
@@ -441,9 +489,7 @@ sub drawChart {
                 callback: function(value, index, values) {
                   if ( value === $xmax )
                     return '>' + value;
-                  else if ( value > $xmax ) 
-                    return '';
-                  else if ( value === 0.9 ) 
+                  else if ( value > $xmax || value === $x_min ) 
                     return '';
                   else 
                     return value;
@@ -463,50 +509,22 @@ sub drawChart {
     }
     
     # Define the colors that will be used for the data 
-    my @bgcolors = (
-        "rgba(153,255,51,0.5)",
-        "rgba(0,51,204,0.5)",
-        "rgba(252,174,30,0.5)",
-        "rgba(190,0,220,0.5)",
-        "rgba(0,204,255,0.5)",
-        "rgba(255,255,0,0.5)",
-        );
-    my @bordercolors = (
-        "rgba(153,255,51,0.9)",
-        "rgba(0,51,204,0.9)",
-        "rgba(252,174,30,0.9)",
-        "rgba(190,0,220,0.9)",
-        "rgba(0,204,255,0.9)",
-        "rgba(255,255,0,0.9)",
-        );
+    my @bgcolors = chart_colors(0.5);
+    my @bordercolors = chart_colors(0.9);
     
-###### start the Chart.js script #
-    print <<EOF;
-<script>
-Chart.defaults.color = "rgb(190,190,190)";
-var ctx = document.getElementById('myChart').getContext('2d');
-var myChart = new Chart(ctx, {
-  type: 'scatter',
-  data: {
-       datasets: [  
-EOF
-#############################
-
+    # Create the data arrays
+    my $data_string = '';
     my $k = 0; 
     foreach my $issn (@issn_clean) {
-
-        print "," if $k;
         
-####### start a new data series
-        print <<EOF;
-        {
-           label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
+        # start a new data series
+        $data_string .= "
+        {  label: '$top_pubs{$issn}->[0]->{'container-title'}->[0]',
            showLine: 'true',
-           backgroundColor: "$bgcolors[$k]",
-           borderColor: "$bordercolors[$k]",
-           data: [
-EOF
-##############################
+           backgroundColor: '$bgcolors[$k]',
+           borderColor: '$bordercolors[$k]',
+           data: [";
+
         ++$k;
             
         my $i = 0;
@@ -514,18 +532,23 @@ EOF
         foreach ( 0 .. $max ) {
             if ( defined $ecdf{$issn}->[$_] ) {
                 my $y = sprintf("%.3f", $ecdf{$issn}->[$_]);
-                print "," if $i; ++$i; 
-                print "             {x: $_, y: $y}";
+                $data_string .= "," if $i; ++$i; 
+                $data_string .= "{x: $_, y: $y}";
             }
         }
-        print "           ]
-        }"; #closes data
+        $data_string .= "]}, "; #closes data
     }
-    print "
-      ]},\n"; #closes datasets
-
-######## Style the axes and add axis labels      
+    
+    ## print the Chart.js script ##
     print <<EOF;
+<script>
+Chart.defaults.color = "rgb(190,190,190)";
+var ctx = document.getElementById('myChart').getContext('2d');
+var myChart = new Chart(ctx, {
+  type: 'scatter',
+  data: {
+      datasets: [$data_string]},
+
       options: {
         locale: 'en-US',
         aspectRatio: 1.7,
@@ -577,9 +600,19 @@ EOF
 });
 </script>
 EOF
-#############################
 }
 
+sub chart_colors {
+    my $transparency = shift; 
+    return (
+        "rgba(153,255,51,$transparency)",
+        "rgba(0,51,204,$transparency)",
+        "rgba(252,174,30,$transparency)",
+        "rgba(190,0,220,$transparency)",
+        "rgba(0,204,255,$transparency)",
+        "rgba(255,255,0,$transparency)",
+        );
+}
 
 # a valid ISSN and year, and the uaheader
 sub get_crossref_metadata {
@@ -643,7 +676,7 @@ sub get_crossref_metadata {
 			} else { 
 				my $fail_message = "Failed (" . $response->status_line . ").";
 				print "WARNING: CrossRef call failed for $issn. $fail_message.\n";
-				$cache->set($cache_id, $fail_message, $timeout);
+				$cache->set($cache_id, $fail_message, 20);
 				exit;
 			}
 			$result_num -= 1000;
@@ -721,9 +754,9 @@ sub start_html {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.1.1/chart.min.js"></script>
-<link rel="stylesheet" href="../css/tool.css">
+<link rel="stylesheet" href="../css/tool.css?asda">
 </head>
-<body onLoad="timeRefresh(10000);">
+<body onLoad="timeRefresh(5000);">
     
 EOF
 
@@ -800,11 +833,12 @@ sub print_intro {
 <div class="intro">
   <p>Compare the citation distributions for up to four selected journals using 
   publically available citation data from the <a href="https://github.com/CrossRef/rest-api-doc">CrossRef API</a>. 
-  Enter the ISSN for each journal of interest. <a href="https://portal.issn.org/">Find journal ISSNs here.</a>
   All publications categorized as 'journal-article' by CrossRef are included. 
   This may include corrections and editorial content, not just peer-reviewed 
-  research articles. All citations recorded for the entire lifetime of each 
-  publication are counted, regardless of the selected time interval.</p>
+  research articles. The time interval controls which papers are considered, 
+  but does not control when the citations occurred. For example, if you select 
+  2015 and a two-year interval, then papers published in 2015 and 2016 are 
+  included. Any citations that occurred after publication will be counted (i.e. from 2015 to present).</p>
   
   <p>Please note that it could take up to several minutes for the results to be 
   generated, especially if you are comparing journals with thousands of 
@@ -839,11 +873,16 @@ sub print_prompt {
     my $hist_checked = " selected=\"selected\"" if ( $chart eq 'hist' );
     my $iecdf_checked = " selected=\"selected\"" if ( $chart eq 'iecdf' );
     
-    foreach (0..3) {
-        unless ( defined $issn_clean[$_] ) {
-            $issn_value[$_] = "";
-        } else {
-            $issn_value[$_] = $issn_clean[$_];
+    for ( 0..3 ) { $issn_value[$_] = '' }
+    my $i = 0;
+    if ( $q->param('ISSN') ) { 
+        foreach ( $q->param('ISSN') ) {
+            if ( defined $top_pubs{$_}->[0]->{'container-title'}->[0] ) {                
+                $issn_value[$i] = "$_ ($top_pubs{$_}->[0]->{'container-title'}->[0])";
+            } else {
+                $issn_value[$i] = $_;
+            }
+            ++$i;       
         }
     }
     
@@ -856,8 +895,13 @@ sub print_prompt {
             
     # print the form    
     print <<EOF;
-<form> 
-  <h3>Journal ISSNs</h3>
+<form>
+  <h3>Search for journals</h3>
+  <p>Enter the full title</p>
+  <input type="text" name="query" size="15" maxlength="50"><input type="submit" value="Search"></p>
+
+  <h3>Selected journals</h3>
+  <p>Enter <a href="https://portal.issn.org/">ISSNs</a> directly or select via the journal search box above</p>
   <p><input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[0]">
     <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[1]">
     <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[2]">
@@ -926,6 +970,8 @@ EOF
 
 sub print_menu {
     print <<EOF;
-<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; <a href="https://alhufton.com/tools/">tools</a> &#9657; journal compare tool</p></div>
+<div class="nav"><p><a href="https://alhufton.com">home</a> &#9657; <a href="https://alhufton.com/tools/">tools</a> &#9657; <a href=\"$tool_url\">journal compare tool</a></p></div>
 EOF
 }
+
+  
