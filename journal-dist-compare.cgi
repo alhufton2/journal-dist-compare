@@ -53,7 +53,7 @@ my $top_num = 10;
 my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
 my $uaheader = "Journal Distribution Compare Tool/beta (https://alhufton.com; mailto:$contact_email)";
 my $alpha = 0.05; 
-my $write_to_file = 1;
+my $write_to_file = 0;
 
 if ( $write_to_file ) {
     open( LOG, ">$tempdir_path/log.txt" );
@@ -929,35 +929,35 @@ sub print_prompt {
     # print the form    
     print <<EOF;
 <form>
-  <h3>Find journals&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
+  <h3><label for="query">Find journals</label>&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
   Enter the full journal title, not an abbreviation
   </span></span></h3>
-  <input type="text" name="query" size="15" maxlength="50"><input type="submit" value="Search"></p>
+  <input id="query" type="text" name="query" size="15" maxlength="50"><input type="submit" value="Search"></p>
 
   <h3>Selected journals&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
      The journal ISSNs listed below will be included in the analysis. Delete an ISSN and hit 'Go' again to remove it.
   </span></span></h3>
-  <p>Enter <a href="https://portal.issn.org/">ISSNs</a> directly or select via the journal search box above</p>
-  <p><input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[0]">
-    <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[1]">
-    <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[2]">
-    <input type="text" name="ISSN" size="15" maxlength="50" value="$issn_value[3]"></p>
+  <label for="ISSN">Enter <a href="https://portal.issn.org/">ISSNs</a> directly or select via the journal search box above</label>
+  <p><input id="ISSN" type="text" name="ISSN" size="17" maxlength="50" value="$issn_value[0]">
+    <input id="ISSN" type="text" name="ISSN" size="17" maxlength="50" value="$issn_value[1]">
+    <input id="ISSN" type="text" name="ISSN" size="17" maxlength="50" value="$issn_value[2]">
+    <input id="ISSN" type="text" name="ISSN" size="17" maxlength="50" value="$issn_value[3]"></p>
 
   <h3>Publication years&nbsp;<span class="tooltip">?<span class="tooltiptext tooltip-left">
      Select which years' content you want to analyze from the selected journals. 
   </span></span></h3>
-  <p>start year&nbsp;<select id="year" name="start_year" required="true"></select></br>
-  interval (yrs)&nbsp;<select id="interval" name="interval">$interval_opt</select></br></p>
+  <p><label for="year">start year</label>&nbsp;<select id="year" name="start_year" required="true"></select></br>
+  <label for="interval">interval (yrs)</label>&nbsp;<select id="interval" name="interval">$interval_opt</select></br></p>
   <h3>Display options</h3>
   <p><label for="chart">Chart&nbsp;</label>
   <select id="chart" name="chart">
   <option $ecdf_checked value="ecdf">eCDF</option>
-  <option $iecdf_checked value="iecdf">inverse eCDF</option>
+  <option $iecdf_checked value="iecdf">inv eCDF</option>
   <option $hist_checked value="hist">histogram</option>
   </select>
   <span class="tooltip">?<span class="tooltiptext tooltip-left">
      Select the chart type: empirical cumulative distribution function (eCDF), inverse eCDF, or a normalized histogram
-  </span></span>
+  </span></span><br>
   <label for="xmax">x-axis&nbsp;</label><input type="text" name="xmax" size="1" maxlength="50" value="$xmax">
   <span class="tooltip">?<span class="tooltiptext tooltip-left">
      Enter a positive integer to set a cutoff for the x-axis. If no number is entered, the range will be automatically set to show the full distributions.
