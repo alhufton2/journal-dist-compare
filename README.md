@@ -14,7 +14,7 @@ The hypothesis that the distributions are distinct is evaluated using pairwise [
 
 For each journal, the top ten most cited articles are listed for the selected period, with links to [OpenCitations.net](https://opencitations.net/), where users can explore metadata on the citing articles if openly available.
 
-For efficiency, the tool caches data for seven days, which might introduce some small variation relative to the current CrossRef numbers.
+For efficiency, the tool caches data for thirty days, which might introduce some small variation relative to the current CrossRef numbers.
 
 ## Dependencies
 - Chart.js
