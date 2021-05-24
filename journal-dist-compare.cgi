@@ -344,12 +344,13 @@ sub make_results {
         my $i = 0;
         my $max = 0;
         
-        foreach ( @uniqs ) {
-            $i += $f->{$_}; 
-            $ecdf{$issn}->[$_] = $i/$n{$issn}; 
+        foreach ( @uniqs ) {  
             if ( $chart eq 'iecdf' ) {
                 $iecdf{$issn}->[$_] = 1 - $i/$n{$issn};
-            } elsif ( $chart eq 'hist') {
+            } 
+            $i += $f->{$_}; 
+            $ecdf{$issn}->[$_] = $i/$n{$issn}; 
+            if ( $chart eq 'hist') {
                 $hist{$issn}->[$_] = $f->{$_}/$n{$issn};
             }
             $max = $_;
