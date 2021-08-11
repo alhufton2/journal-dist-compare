@@ -472,7 +472,7 @@ sub make_results {
             my $title = $_->{'title'}->[0];
             my $is_ref_by = $_->{'is-referenced-by-count'};
             my $safe_doi = $q->url_encode($doi);
-            my $occ_search = "https://opencitations.net/search?text=$safe_doi&rule=doi";
+            my $occ_search = "https://opencitations.net/index/search?text=$safe_doi&rule=citeddoi";
             print "<li><div style=\"float:left;width:80%;\"><a href=\"https://doi.org/$doi\" target=\"_blank\">$title</a> ($is_ref_by)</div><div style=\"float:right;\"><a href=\"$occ_search\" target=\"_blank\"><span style=\"color:rgb(153, 49, 252)\">Open</span><span style=\"color:rgb(45, 34, 222)\">Citations</span></a></div><div style=\"clear:both;\"></div></li>\n";
         }
         print "</ol>\n";
