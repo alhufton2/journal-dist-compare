@@ -1,11 +1,11 @@
 #!/usr/bin/perl
 
-# use the shebang line below when running at bluehost
-#   !/usr/bin/perlml
+# use #!/usr/bin/perlml when run on bluehost server and comment local::lib
 
 use strict;
 use warnings;
 use utf8;
+use local::lib '/home/alhufton/perl5'; # modify as needed
 
 use CGI::Carp qw(fatalsToBrowser set_message);
 BEGIN {
@@ -39,7 +39,7 @@ use open qw( :encoding(UTF-8) :std );
 binmode(STDOUT, ":utf8");
 
 # Open the cache
-my $tempdir_path = '/Users/alhufton/Sites/tmp';
+my $tempdir_path = '/home/alhufton/Sites/tmp';
 # my $tempdir_path = '/home3/alhufton/tmp/journal-compare';
 my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
@@ -54,6 +54,7 @@ my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
 my $uaheader = "Journal Distribution Compare Tool/beta (https://alhufton.com; mailto:$contact_email)";
 my $alpha = 0.05; 
 my $write_to_file = 0;
+my $stylesheet = "https://alhufton.com/css/tool.css";
 
 if ( $write_to_file ) {
     open( LOG, ">$tempdir_path/log.txt" );
@@ -791,7 +792,7 @@ sub start_html {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.1.1/chart.min.js"></script>
-<link rel="stylesheet" href="../css/tool.css">
+<link rel="stylesheet" href="$stylesheet">
 </head>
 <body onLoad="timeRefresh(5000);">
     
