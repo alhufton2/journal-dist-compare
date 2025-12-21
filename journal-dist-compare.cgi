@@ -1,11 +1,25 @@
 #!/usr/bin/perl
 
-# use #!/usr/bin/perlml when run on bluehost server and comment local::lib
+###########################################
+# Compare Journal Citation Distributions  #
+###########################################
+# Written by Andrew L Hufton (https://alhufton.com)
+# See https://github.com/alhufton2/journal-dist-compare for updates
+#
+# Compare the citation distributions for up to four journals using publicly available
+# citation data from the CrossRef API
+#
+##### Before running ######
+# 1. enter your $contact_email, to identify yourself to the CrossRef API
+# 2. Configure the cache as needed for your system. See CHI documentation for details.
+# 3. Check that the shebang line points at the right perl installation for your system
+# 4. Update the folder where local modules are stored, using local::lib
+###########################
 
 use strict;
 use warnings;
 use utf8;
-use local::lib '/home/alhufton/perl5'; # modify as needed
+use local::lib '/home/some_folder/perl5'; # modify as needed
 
 use CGI::Carp qw(fatalsToBrowser set_message);
 BEGIN {
@@ -39,22 +53,20 @@ use open qw( :encoding(UTF-8) :std );
 binmode(STDOUT, ":utf8");
 
 # Open the cache
-my $tempdir_path = '/home/alhufton/Sites/tmp';
-# my $tempdir_path = '/home3/alhufton/tmp/journal-compare';
+my $tempdir_path = '/home/some_folder/tmp/journal-compare';
 my $cache = CHI->new( driver => 'File', root_dir => $tempdir_path );
 
 # Set various variables
 my $max_interval = 3; # maximum year interval allowed. 
 my $max_journals = 4;
-my $contact_email = 'enter email address';
+my $contact_email = 'ENTER EMAIL ADDRESS';
 my $timeout = 300;
-my $cache_time = '7 days';
+my $cache_time = '30 days';
 my $top_num = 10; 
 my $json = JSON::MaybeXS->new->pretty;  # creates a json parsing object
 my $uaheader = "Journal Distribution Compare Tool/beta (https://alhufton.com; mailto:$contact_email)";
 my $alpha = 0.05; 
 my $write_to_file = 0;
-my $stylesheet = "https://alhufton.com/css/tool.css";
 
 if ( $write_to_file ) {
     open( LOG, ">$tempdir_path/log.txt" );
@@ -473,7 +485,7 @@ sub make_results {
             my $title = $_->{'title'}->[0];
             my $is_ref_by = $_->{'is-referenced-by-count'};
             my $safe_doi = $q->url_encode($doi);
-            my $occ_search = "https://opencitations.net/index/search?text=$safe_doi&rule=citeddoi";
+            my $occ_search = "https://search.opencitations.net/search?text=$safe_doi&rule=citeddoi";
             print "<li><div style=\"float:left;width:80%;\"><a href=\"https://doi.org/$doi\" target=\"_blank\">$title</a> ($is_ref_by)</div><div style=\"float:right;\"><a href=\"$occ_search\" target=\"_blank\"><span style=\"color:rgb(153, 49, 252)\">Open</span><span style=\"color:rgb(45, 34, 222)\">Citations</span></a></div><div style=\"clear:both;\"></div></li>\n";
         }
         print "</ol>\n";
@@ -792,7 +804,7 @@ sub start_html {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.1.1/chart.min.js"></script>
-<link rel="stylesheet" href="$stylesheet">
+<link rel="stylesheet" href="../css/tool.css">
 </head>
 <body onLoad="timeRefresh(5000);">
     
@@ -888,7 +900,8 @@ sub print_intro {
   
   <p>Try a <a href="$tool_url?ISSN=$issn_rand[0]&ISSN=$issn_rand[1]&ISSN=$issn_rand[2]&ISSN=$issn_rand[3]&start_year=$year_rand&interval=1&log=true&stepped=true">Random Example</a>!</p>
   
-  <p><a href="https://github.com/alhufton2/journal-dist-compare">Source code and methods&nbsp;▸</a></p>
+  <p><a href="https://github.com/alhufton2/journal-dist-compare">Source code and methods&nbsp;▸</a></br>
+  <a href="https://alhufton.com/generating-journal-citation-distributions-from-open-data"/>Associated blog&nbsp;▸</a></p>
   
 </div>
 
